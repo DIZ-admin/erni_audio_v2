@@ -39,8 +39,8 @@ class SecurityValidator:
         '.mp3', '.wav', '.mp4', '.avi', '.mov', '.m4a', '.flac'
     }
     
-    # Максимальный размер файла (100MB)
-    MAX_FILE_SIZE: int = 100 * 1024 * 1024
+    # Максимальный размер файла (300MB)
+    MAX_FILE_SIZE: int = 300 * 1024 * 1024
     
     # Минимальный размер файла (1KB)
     MIN_FILE_SIZE: int = 1024

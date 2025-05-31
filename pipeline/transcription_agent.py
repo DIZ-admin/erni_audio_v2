@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import List, Dict, Optional
 import openai
 import time
+import subprocess
+import tempfile
+import uuid
+from pydub import AudioSegment
 
 class TranscriptionAgent:
     """
@@ -127,39 +131,17 @@ class TranscriptionAgent:
             # Валидация файла
             self._validate_audio_file(wav_local)
 
-            file_size = wav_local.stat().st_size / (1024 * 1024)  # MB
+            file_size_mb = wav_local.stat().st_size / (1024 * 1024)  # MB
+            max_size = self.SUPPORTED_MODELS[self.model]["max_file_size_mb"]
             model_info = self.SUPPORTED_MODELS[self.model]
 
-            self.logger.info(f"Начинаю транскрипцию с {model_info['name']}: {wav_local} ({file_size:.1f}MB)")
+            self.logger.info(f"Начинаю транскрипцию с {model_info['name']}: {wav_local} ({file_size_mb:.1f}MB)")
 
-            # Подготовка параметров запроса
-            transcription_params = self._prepare_transcription_params(prompt)
-
-            with open(wav_local, "rb") as audio_file:
-                transcript = self.client.audio.transcriptions.create(
-                    model=self.model,
-                    file=audio_file,
-                    **transcription_params
-                )
-
-            # Обработка ответа в зависимости от модели
-            segments = self._process_transcript_response(transcript)
-
-            # Логируем метрики производительности
-            duration = time.time() - start_time
-            audio_duration = getattr(transcript, 'duration', None)
-            processing_ratio = duration / audio_duration if audio_duration else None
-
-            self.logger.info(f"Транскрипция завершена: {len(segments)} сегментов", extra={
-                'model': self.model,
-                'processing_time': f"{duration:.2f}s",
-                'file_size_mb': f"{file_size:.1f}MB",
-                'processing_ratio': f"{processing_ratio:.2f}x" if processing_ratio else "N/A",
-                'segments_count': len(segments),
-                'audio_duration': f"{audio_duration:.2f}s" if audio_duration else "N/A"
-            })
-
-            return segments
+            # Проверяем, нужно ли разбивать файл
+            if file_size_mb > max_size:
+                return self._transcribe_large_file(wav_local, prompt)
+            else:
+                return self._transcribe_single_file(wav_local, prompt)
 
         except openai.APIConnectionError as e:
             self.logger.error(f"Ошибка подключения к OpenAI API: {e}")
@@ -179,11 +161,128 @@ class TranscriptionAgent:
         if not wav_local.exists():
             raise FileNotFoundError(f"Аудиофайл не найден: {wav_local}")
 
+        # Проверка размера файла - теперь не блокируем, а предупреждаем
         file_size_mb = wav_local.stat().st_size / (1024 * 1024)
         max_size = self.SUPPORTED_MODELS[self.model]["max_file_size_mb"]
 
         if file_size_mb > max_size:
-            raise ValueError(f"Размер файла ({file_size_mb:.1f}MB) превышает максимальный для модели {self.model} ({max_size}MB)")
+            self.logger.warning(f"Файл ({file_size_mb:.1f}MB) превышает лимит OpenAI ({max_size}MB). Будет разбит на части.")
+
+    def _split_audio_file(self, wav_local: Path, chunk_duration_minutes: int = 10) -> List[Path]:
+        """
+        Разбивает большой аудиофайл на части для обработки в OpenAI API.
+
+        Args:
+            wav_local: Путь к исходному файлу
+            chunk_duration_minutes: Длительность каждой части в минутах
+
+        Returns:
+            Список путей к частям файла
+        """
+        try:
+            self.logger.info(f"Разбиваю файл {wav_local.name} на части по {chunk_duration_minutes} минут...")
+
+            # Загружаем аудио
+            audio = AudioSegment.from_wav(wav_local)
+            chunk_duration_ms = chunk_duration_minutes * 60 * 1000  # в миллисекундах
+
+            chunks = []
+            temp_dir = Path(tempfile.gettempdir())
+
+            # Разбиваем на части
+            for i, start_ms in enumerate(range(0, len(audio), chunk_duration_ms)):
+                end_ms = min(start_ms + chunk_duration_ms, len(audio))
+                chunk = audio[start_ms:end_ms]
+
+                # Сохраняем часть
+                chunk_path = temp_dir / f"{wav_local.stem}_chunk_{i:03d}.wav"
+                chunk.export(chunk_path, format="wav")
+                chunks.append(chunk_path)
+
+                chunk_size_mb = chunk_path.stat().st_size / (1024 * 1024)
+                self.logger.debug(f"Создана часть {i+1}: {chunk_path.name} ({chunk_size_mb:.1f}MB)")
+
+            self.logger.info(f"Файл разбит на {len(chunks)} частей")
+            return chunks
+
+        except Exception as e:
+            self.logger.error(f"Ошибка разбиения файла: {e}")
+            raise RuntimeError(f"Не удалось разбить файл: {e}") from e
+
+    def _transcribe_single_file(self, wav_local: Path, prompt: str = "") -> List[Dict]:
+        """Транскрибирует один файл."""
+        start_time = time.time()
+
+        # Подготовка параметров запроса
+        transcription_params = self._prepare_transcription_params(prompt)
+
+        with open(wav_local, "rb") as audio_file:
+            transcript = self.client.audio.transcriptions.create(
+                model=self.model,
+                file=audio_file,
+                **transcription_params
+            )
+
+        # Обработка ответа в зависимости от модели
+        segments = self._process_transcript_response(transcript)
+
+        # Логируем метрики производительности
+        duration = time.time() - start_time
+        audio_duration = getattr(transcript, 'duration', None)
+        processing_ratio = duration / audio_duration if audio_duration else None
+        file_size_mb = wav_local.stat().st_size / (1024 * 1024)
+
+        self.logger.info(f"Транскрипция завершена: {len(segments)} сегментов", extra={
+            'model': self.model,
+            'processing_time': f"{duration:.2f}s",
+            'file_size_mb': f"{file_size_mb:.1f}MB",
+            'processing_ratio': f"{processing_ratio:.2f}x" if processing_ratio else "N/A",
+            'segments_count': len(segments),
+            'audio_duration': f"{audio_duration:.2f}s" if audio_duration else "N/A"
+        })
+
+        return segments
+
+    def _transcribe_large_file(self, wav_local: Path, prompt: str = "") -> List[Dict]:
+        """Транскрибирует большой файл, разбивая его на части."""
+        self.logger.info(f"Обрабатываю большой файл через разбиение на части...")
+
+        # Разбиваем файл на части
+        chunks = self._split_audio_file(wav_local, chunk_duration_minutes=10)
+
+        all_segments = []
+        total_offset = 0.0
+
+        try:
+            for i, chunk_path in enumerate(chunks):
+                self.logger.info(f"Обрабатываю часть {i+1}/{len(chunks)}: {chunk_path.name}")
+
+                # Транскрибируем часть
+                chunk_segments = self._transcribe_single_file(chunk_path, prompt)
+
+                # Корректируем временные метки с учетом смещения
+                for segment in chunk_segments:
+                    segment['start'] += total_offset
+                    segment['end'] += total_offset
+                    segment['id'] = len(all_segments)  # Перенумеровываем ID
+
+                all_segments.extend(chunk_segments)
+
+                # Обновляем смещение для следующей части (10 минут = 600 секунд)
+                total_offset += 10 * 60
+
+                self.logger.info(f"Часть {i+1} обработана: {len(chunk_segments)} сегментов")
+
+        finally:
+            # Удаляем временные файлы
+            for chunk_path in chunks:
+                try:
+                    chunk_path.unlink()
+                except Exception as e:
+                    self.logger.warning(f"Не удалось удалить временный файл {chunk_path}: {e}")
+
+        self.logger.info(f"Большой файл обработан: {len(all_segments)} сегментов из {len(chunks)} частей")
+        return all_segments
 
     def _prepare_transcription_params(self, prompt: str) -> Dict:
         """Подготовка параметров для запроса транскрипции."""

@@ -61,7 +61,7 @@ class PipelineConfig:
     voiceprints_dir: Path = Path("voiceprints")
 
     # Лимиты
-    max_file_size_mb: int = 100
+    max_file_size_mb: int = 300  # Увеличен для поддержки больших файлов
     max_audio_duration_hours: int = 4
     max_concurrent_jobs: int = 3
 
