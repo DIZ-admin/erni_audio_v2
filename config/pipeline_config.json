@@ -1,0 +1,18 @@
+{
+  "pyannote": {
+    "max_retries": 5,
+    "retry_wait_seconds": 3,
+    "timeout_seconds": 10
+  },
+  "openai": {
+    "timeout_seconds": 60,
+    "max_retries": 3
+  },
+  "audio": {
+    "target_sample_rate": 16000,
+    "upload_timeout_seconds": 60
+  },
+  "qc": {
+    "per_speaker_seconds": 30
+  }
+}

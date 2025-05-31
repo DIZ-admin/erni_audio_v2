@@ -1,0 +1,20 @@
+[
+  {
+    "speaker": "SPEAKER_00",
+    "start": 0.0,
+    "end": 2.5,
+    "confidence": 0.95
+  },
+  {
+    "speaker": "SPEAKER_01", 
+    "start": 2.5,
+    "end": 5.0,
+    "confidence": 0.92
+  },
+  {
+    "speaker": "SPEAKER_00",
+    "start": 5.0,
+    "end": 7.5,
+    "confidence": 0.88
+  }
+]
