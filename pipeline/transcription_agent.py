@@ -23,6 +23,7 @@ class TranscriptionAgent:
             "max_file_size_mb": 25,
             "supports_language": True,
             "supports_prompt": True,
+            "supports_verbose_json": True,
             "cost_tier": "low"
         },
         "gpt-4o-mini-transcribe": {
@@ -31,6 +32,7 @@ class TranscriptionAgent:
             "max_file_size_mb": 25,
             "supports_language": True,
             "supports_prompt": True,
+            "supports_verbose_json": False,
             "cost_tier": "medium"
         },
         "gpt-4o-transcribe": {
@@ -39,11 +41,12 @@ class TranscriptionAgent:
             "max_file_size_mb": 25,
             "supports_language": True,
             "supports_prompt": True,
+            "supports_verbose_json": False,
             "cost_tier": "high"
         }
     }
 
-    def __init__(self, api_key: str, model: str = "whisper-1", language: Optional[str] = None):
+    def __init__(self, api_key: str, model: str = "whisper-1", language: Optional[str] = None, response_format: str = "auto"):
         """
         Инициализация агента транскрипции.
 
@@ -51,15 +54,28 @@ class TranscriptionAgent:
             api_key: OpenAI API ключ
             model: Модель для транскрипции (whisper-1, gpt-4o-mini-transcribe, gpt-4o-transcribe)
             language: Код языка (например, 'en', 'ru', 'de') для улучшения точности
+            response_format: Формат ответа (auto, json, verbose_json, text, srt, vtt)
         """
         self.client = OpenAI(api_key=api_key)
         self.model = self._validate_model(model)
         self.language = language
+        self.response_format = self._determine_response_format(response_format)
         self.logger = logging.getLogger(__name__)
 
         # Логируем выбранную модель
         model_info = self.SUPPORTED_MODELS[self.model]
         self.logger.info(f"Инициализирован TranscriptionAgent с моделью: {model_info['name']} ({model_info['description']})")
+        self.logger.info(f"Формат ответа: {self.response_format}")
+
+    # Поддерживаемые форматы ответа
+    SUPPORTED_RESPONSE_FORMATS = {
+        "auto": "Автоматический выбор оптимального формата",
+        "json": "Минимальный JSON с полем text",
+        "verbose_json": "Подробный JSON со сегментами и метаданными",
+        "text": "Чистый текст без обёртки",
+        "srt": "Субтитры в формате SRT",
+        "vtt": "Субтитры в формате WebVTT"
+    }
 
     def _validate_model(self, model: str) -> str:
         """Валидация выбранной модели."""
@@ -67,6 +83,32 @@ class TranscriptionAgent:
             available_models = ", ".join(self.SUPPORTED_MODELS.keys())
             raise ValueError(f"Неподдерживаемая модель '{model}'. Доступные модели: {available_models}")
         return model
+
+    def _validate_response_format(self, response_format: str) -> str:
+        """Валидация формата ответа."""
+        if response_format not in self.SUPPORTED_RESPONSE_FORMATS:
+            available_formats = ", ".join(self.SUPPORTED_RESPONSE_FORMATS.keys())
+            raise ValueError(f"Неподдерживаемый формат '{response_format}'. Доступные форматы: {available_formats}")
+        return response_format
+
+    def _determine_response_format(self, requested_format: str) -> str:
+        """Определяет оптимальный формат ответа для модели."""
+        # Валидируем запрошенный формат
+        self._validate_response_format(requested_format)
+
+        # Если auto, выбираем оптимальный формат
+        if requested_format == "auto":
+            if self.SUPPORTED_MODELS[self.model]["supports_verbose_json"]:
+                return "verbose_json"  # Для whisper-1
+            else:
+                return "json"  # Для gpt-4o моделей
+
+        # Если запрошен verbose_json, но модель его не поддерживает
+        if requested_format == "verbose_json" and not self.SUPPORTED_MODELS[self.model]["supports_verbose_json"]:
+            self.logger.warning(f"Модель {self.model} не поддерживает verbose_json, используем json")
+            return "json"
+
+        return requested_format
 
     def run(self, wav_local: Path, prompt: str = "") -> List[Dict]:
         """
@@ -145,14 +187,8 @@ class TranscriptionAgent:
 
     def _prepare_transcription_params(self, prompt: str) -> Dict:
         """Подготовка параметров для запроса транскрипции."""
-        # Новые модели gpt-4o-* не поддерживают verbose_json
-        if self.model.startswith("gpt-4o"):
-            response_format = "json"
-        else:
-            response_format = "verbose_json"
-
         params = {
-            "response_format": response_format,
+            "response_format": self.response_format,
             "temperature": 0,
         }
 
@@ -167,17 +203,41 @@ class TranscriptionAgent:
         return params
 
     def _process_transcript_response(self, transcript) -> List[Dict]:
-        """Обработка ответа транскрипции в зависимости от модели."""
+        """Обработка ответа транскрипции в зависимости от формата."""
 
-        # GPT-4o модели возвращают только простой JSON с текстом
-        if self.model.startswith("gpt-4o"):
-            text = getattr(transcript, 'text', '')
-            if not text:
-                self.logger.warning("GPT-4o модель не вернула текст")
+        # Обработка в зависимости от формата ответа
+        if self.response_format == "verbose_json":
+            # verbose_json возвращает сегменты
+            segments = getattr(transcript, 'segments', [])
+
+            if not segments:
+                self.logger.warning(f"Модель {self.model} не вернула сегментов в verbose_json")
                 return []
 
-            # Создаем искусственный сегмент из полного текста
-            # В реальном приложении можно разбить на предложения
+            # Конвертируем сегменты в словари
+            processed_segments = []
+            for segment in segments:
+                if hasattr(segment, 'model_dump'):
+                    segment_dict = segment.model_dump()
+                elif hasattr(segment, '__dict__'):
+                    segment_dict = segment.__dict__
+                else:
+                    segment_dict = dict(segment)
+
+                processed_segments.append(segment_dict)
+
+            model_info = self.SUPPORTED_MODELS[self.model]
+            self.logger.info(f"{model_info['name']}: обработано {len(processed_segments)} сегментов (verbose_json)")
+            return processed_segments
+
+        elif self.response_format == "json":
+            # json возвращает только текст
+            text = getattr(transcript, 'text', '')
+            if not text:
+                self.logger.warning(f"Модель {self.model} не вернула текст в json")
+                return []
+
+            # Создаем искусственный сегмент
             duration = getattr(transcript, 'duration', 0.0)
             segment = {
                 "id": 0,
@@ -191,34 +251,33 @@ class TranscriptionAgent:
                 "compression_ratio": 1.0
             }
 
-            self.logger.info(f"GPT-4o модель: создан сегмент из {len(text)} символов")
+            model_info = self.SUPPORTED_MODELS[self.model]
+            self.logger.info(f"{model_info['name']}: создан сегмент из {len(text)} символов (json)")
             return [segment]
 
-        # Whisper-1 возвращает verbose_json с сегментами
         else:
-            segments = getattr(transcript, 'segments', [])
-
-            if not segments:
-                self.logger.warning("Whisper-1 не вернул сегментов")
+            # Для text, srt, vtt форматов возвращаем как есть
+            # Эти форматы обычно используются для прямого вывода, а не для обработки
+            text_content = str(transcript) if transcript else ""
+            if not text_content:
+                self.logger.warning(f"Модель {self.model} не вернула контент в формате {self.response_format}")
                 return []
 
-            # Конвертируем сегменты в словари
-            processed_segments = []
-            for segment in segments:
-                if hasattr(segment, 'model_dump'):
-                    # Новый формат OpenAI API
-                    segment_dict = segment.model_dump()
-                elif hasattr(segment, '__dict__'):
-                    # Объект с атрибутами
-                    segment_dict = segment.__dict__
-                else:
-                    # Уже словарь
-                    segment_dict = dict(segment)
+            segment = {
+                "id": 0,
+                "start": 0.0,
+                "end": 0.0,
+                "text": text_content.strip(),
+                "tokens": [],
+                "avg_logprob": 0.0,
+                "no_speech_prob": 0.0,
+                "temperature": 0.0,
+                "compression_ratio": 1.0
+            }
 
-                processed_segments.append(segment_dict)
-
-            self.logger.info(f"Whisper-1: обработано {len(processed_segments)} сегментов")
-            return processed_segments
+            model_info = self.SUPPORTED_MODELS[self.model]
+            self.logger.info(f"{model_info['name']}: обработан контент в формате {self.response_format}")
+            return [segment]
 
     def get_model_info(self) -> Dict:
         """Возвращает информацию о текущей модели."""
