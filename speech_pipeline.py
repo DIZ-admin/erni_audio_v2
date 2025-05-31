@@ -38,6 +38,16 @@ def parse_args():
     p.add_argument("--voiceprints-dir", help="извлечь WAV≤30с на каждого speakers → exit")
     p.add_argument("--identify", help="JSON mapping {voiceprintId:HumanName} → включить идентификацию")
 
+    # Опции транскрипции
+    p.add_argument("--transcription-model",
+                   choices=["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"],
+                   default="whisper-1",
+                   help="модель для транскрипции (whisper-1: быстро/дешево, gpt-4o-mini-transcribe: баланс, gpt-4o-transcribe: максимальное качество)")
+    p.add_argument("--language",
+                   help="код языка для транскрипции (en, ru, de, fr, es, etc.) - улучшает точность")
+    p.add_argument("--show-cost-estimate", action="store_true",
+                   help="показать оценку стоимости транскрипции для всех моделей")
+
     # Опции загрузки файлов (только pyannote.ai Media API)
     # Примечание: OneDrive и transfer.sh удалены для повышения безопасности
 
@@ -141,6 +151,49 @@ def validate_input_file(input_path: str) -> None:
 
     logger.info(f"Файл прошел валидацию безопасности: {message}")
 
+def show_cost_estimates(file_path: str, transcription_model: str) -> None:
+    """Показывает оценку стоимости транскрипции для всех моделей"""
+    logger = logging.getLogger(__name__)
+
+    try:
+        # Определяем размер файла
+        if file_path.startswith(('http://', 'https://')):
+            # Для URL пытаемся получить размер через HEAD запрос
+            try:
+                response = requests.head(file_path, timeout=10)
+                file_size_mb = int(response.headers.get('content-length', 0)) / (1024 * 1024)
+                if file_size_mb == 0:
+                    file_size_mb = 10  # Примерная оценка для URL
+            except:
+                file_size_mb = 10  # Примерная оценка
+        else:
+            # Для локальных файлов
+            file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+
+        # Получаем оценки стоимости для всех моделей
+        from pipeline.transcription_agent import TranscriptionAgent
+
+        print("\n💰 Оценка стоимости транскрипции:")
+        print(f"📁 Размер файла: {file_size_mb:.1f} MB")
+        print("─" * 60)
+
+        for model_name, model_info in TranscriptionAgent.SUPPORTED_MODELS.items():
+            # Создаем временный агент для оценки
+            temp_agent = TranscriptionAgent("dummy_key", model_name)
+            cost_estimate = temp_agent.estimate_cost(file_size_mb)
+
+            # Отмечаем выбранную модель
+            marker = "👉 " if model_name == transcription_model else "   "
+
+            print(f"{marker}{model_info['name']:<25} | {cost_estimate:>10} | {model_info['cost_tier']}")
+
+        print("─" * 60)
+        print("💡 Примечание: Оценки приблизительные и могут отличаться от фактической стоимости")
+        print()
+
+    except Exception as e:
+        logger.warning(f"Не удалось рассчитать оценку стоимости: {e}")
+
 def main():
     import time
     start_time = time.time()
@@ -155,16 +208,29 @@ def main():
     logger.info("🚀 Запуск Speech Pipeline", extra={
         'input_file': args.input,
         'output_format': args.format,
-        'pipeline_version': '1.0'
+        'transcription_model': args.transcription_model,
+        'language': args.language,
+        'pipeline_version': '2.0'
     })
 
     try:
         # 1) Валидация входного файла
         validate_input_file(args.input)
 
-        # 2) Проверка обязательных окружений
+        # 2) Показать оценку стоимости если запрошено
+        if args.show_cost_estimate:
+            show_cost_estimates(args.input, args.transcription_model)
+
+        # 3) Проверка обязательных окружений
         PYANNOTE_KEY = os.getenv("PYANNOTEAI_API_TOKEN") or os.getenv("PYANNOTE_API_KEY") or sys_exit("Missing PYANNOTEAI_API_TOKEN or PYANNOTE_API_KEY")
         OPENAI_KEY   = os.getenv("OPENAI_API_KEY")   or sys_exit("Missing OPENAI_API_KEY")
+
+        # 4) Логируем выбранную модель транскрипции
+        from pipeline.transcription_agent import TranscriptionAgent
+        model_info = TranscriptionAgent.SUPPORTED_MODELS.get(args.transcription_model, {})
+        logger.info(f"🎯 Выбрана модель транскрипции: {model_info.get('name', args.transcription_model)}")
+        if args.language:
+            logger.info(f"🌍 Установлен язык: {args.language}")
 
     except (FileNotFoundError, ValueError) as e:
         logger.error(f"Ошибка валидации: {e}")
@@ -247,9 +313,19 @@ def main():
         logger.info("✅ Применён маппинг голосовых отпечатков")
 
     # 4) TranscriptionAgent → whisper_segments (List[Dict])
-    logger.info("[3/5] 📝 Транскрибирую через Whisper...")
+    model_name = TranscriptionAgent.SUPPORTED_MODELS.get(args.transcription_model, {}).get('name', args.transcription_model)
+    logger.info(f"[3/5] 📝 Транскрибирую через {model_name}...")
     try:
-        trans_agent = TranscriptionAgent(api_key=OPENAI_KEY)
+        trans_agent = TranscriptionAgent(
+            api_key=OPENAI_KEY,
+            model=args.transcription_model,
+            language=args.language
+        )
+
+        # Показываем информацию о модели
+        model_info = trans_agent.get_model_info()
+        logger.info(f"🔧 Модель: {model_info['name']} ({model_info['cost_tier']} cost)")
+
         whisper_segments = trans_agent.run(wav_local, args.prompt)
         logger.info(f"✅ Транскрипция завершена: {len(whisper_segments)} сегментов")
 

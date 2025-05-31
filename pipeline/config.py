@@ -41,6 +41,17 @@ class APIConfig:
 
 
 @dataclass
+class TranscriptionConfig:
+    """Конфигурация транскрипции"""
+    model: str = "whisper-1"  # whisper-1, gpt-4o-mini-transcribe, gpt-4o-transcribe
+    language: Optional[str] = None  # Автоопределение языка по умолчанию
+    prompt: str = ""  # Контекстная подсказка
+    temperature: float = 0.0  # Температура для генерации
+    enable_cost_estimation: bool = True  # Показывать оценку стоимости
+    fallback_model: str = "whisper-1"  # Резервная модель при ошибках
+
+
+@dataclass
 class PipelineConfig:
     """Основная конфигурация пайплайна"""
     # Пути
@@ -48,24 +59,32 @@ class PipelineConfig:
     cache_dir: Path = Path("cache")
     logs_dir: Path = Path("logs")
     voiceprints_dir: Path = Path("voiceprints")
-    
+
     # Лимиты
     max_file_size_mb: int = 100
     max_audio_duration_hours: int = 4
     max_concurrent_jobs: int = 3
-    
+
     # Качество
     min_confidence_threshold: float = 0.7
     min_segment_duration: float = 0.5
-    
+
     # Кэширование
     cache_enabled: bool = True
     cache_ttl_hours: int = 24
-    
+
     # Логирование
     log_level: str = "INFO"
     log_rotation_mb: int = 10
     log_backup_count: int = 5
+
+    # Транскрипция
+    transcription: TranscriptionConfig = None
+
+    def __post_init__(self):
+        """Инициализация после создания объекта"""
+        if self.transcription is None:
+            self.transcription = TranscriptionConfig()
 
 
 class ConfigurationManager(ConfigurationInterface):
@@ -186,6 +205,83 @@ class ConfigurationManager(ConfigurationInterface):
     def get_pipeline_config(self) -> PipelineConfig:
         """Получает конфигурацию пайплайна"""
         return self._config
+
+    def get_transcription_config(self) -> TranscriptionConfig:
+        """Получает конфигурацию транскрипции"""
+        return self._config.transcription
+
+    def set_transcription_model(self, model: str) -> None:
+        """Устанавливает модель транскрипции"""
+        # Список поддерживаемых моделей (избегаем циклического импорта)
+        supported_models = ["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"]
+
+        # Валидируем модель
+        if model not in supported_models:
+            available_models = ", ".join(supported_models)
+            raise ConfigurationError(f"Неподдерживаемая модель '{model}'. Доступные: {available_models}")
+
+        self._config.transcription.model = model
+        self.logger.info(f"Установлена модель транскрипции: {model}")
+
+    def set_transcription_language(self, language: Optional[str]) -> None:
+        """Устанавливает язык транскрипции"""
+        self._config.transcription.language = language
+        if language:
+            self.logger.info(f"Установлен язык транскрипции: {language}")
+        else:
+            self.logger.info("Язык транскрипции сброшен (автоопределение)")
+
+    def get_transcription_model_info(self) -> Dict[str, Any]:
+        """Получает информацию о текущей модели транскрипции"""
+        # Информация о моделях (избегаем циклического импорта)
+        model_info_map = {
+            "whisper-1": {
+                "name": "Whisper v1",
+                "description": "Базовая модель Whisper, быстрая и экономичная",
+                "cost_tier": "low"
+            },
+            "gpt-4o-mini-transcribe": {
+                "name": "GPT-4o Mini Transcribe",
+                "description": "Улучшенная модель с балансом цены и качества",
+                "cost_tier": "medium"
+            },
+            "gpt-4o-transcribe": {
+                "name": "GPT-4o Transcribe",
+                "description": "Наиболее точная модель с лучшим качеством распознавания",
+                "cost_tier": "high"
+            }
+        }
+
+        model = self._config.transcription.model
+        if model in model_info_map:
+            return {
+                "current_model": model,
+                "language": self._config.transcription.language,
+                **model_info_map[model]
+            }
+        else:
+            return {"current_model": model, "status": "unknown"}
+
+    def estimate_transcription_cost(self, file_size_mb: float) -> Dict[str, str]:
+        """Оценивает стоимость транскрипции для всех моделей"""
+        # Простая оценка стоимости (избегаем циклического импорта)
+        cost_estimates = {
+            "low": f"~${file_size_mb * 0.006:.3f}",  # whisper-1: $0.006/min
+            "medium": f"~${file_size_mb * 0.012:.3f}",  # gpt-4o-mini-transcribe: примерно в 2 раза дороже
+            "high": f"~${file_size_mb * 0.024:.3f}"  # gpt-4o-transcribe: примерно в 4 раза дороже
+        }
+
+        estimates = {}
+        model_cost_map = {
+            "whisper-1": "low",
+            "gpt-4o-mini-transcribe": "medium",
+            "gpt-4o-transcribe": "high"
+        }
+
+        for model_name, cost_tier in model_cost_map.items():
+            estimates[model_name] = cost_estimates[cost_tier]
+
+        return estimates
     
     def update_config(self, **kwargs) -> None:
         """Обновляет конфигурацию"""
