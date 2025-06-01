@@ -33,6 +33,12 @@ def parse_args():
                    help="куда сохранить финальный файл")
     p.add_argument("--format", choices=["srt", "json", "ass"], default="srt",
                    help="формат выходных субтитров")
+    p.add_argument("--all-formats", action="store_true",
+                   help="создать файлы во всех форматах (SRT, JSON, ASS)")
+    p.add_argument("--overwrite", action="store_true",
+                   help="перезаписывать существующие файлы")
+    p.add_argument("--add-timestamp", action="store_true",
+                   help="добавлять временную метку к именам файлов")
     p.add_argument("--prompt", default="", help="начальный Whisper prompt")
     p.add_argument("--remote-wav-url", help="пропустить upload → использовать этот HTTPS URL")
     p.add_argument("--voiceprints-dir", help="извлечь WAV≤30с на каждого speakers → exit")
@@ -260,11 +266,19 @@ def run_replicate_pipeline(args, logger, replicate_key: str, start_time: float):
         logger.debug(f"Результат Replicate сохранён: {interim_file}")
 
         # 6) Экспорт в финальный формат
-        logger.info(f"[2/2] 💾 Экспортирую в {args.format.upper()}...")
-        export_agent = ExportAgent(format=args.format)
+        if args.all_formats:
+            logger.info(f"[2/2] 💾 Экспортирую во всех форматах (SRT, JSON, ASS)...")
+        else:
+            logger.info(f"[2/2] 💾 Экспортирую в {args.format.upper()}...")
+        export_agent = ExportAgent(format=args.format, create_all_formats=args.all_formats,
+                                   overwrite_existing=args.overwrite, add_timestamp=args.add_timestamp)
         out_path = Path(args.output)
-        export_agent.run(segments, out_path)
-        logger.info(f"🎉 Готово! Результат сохранён: {out_path}")
+        created_files = export_agent.run(segments, out_path)
+
+        if args.all_formats:
+            logger.info(f"🎉 Готово! Созданы файлы: {[str(f) for f in created_files]}")
+        else:
+            logger.info(f"🎉 Готово! Результат сохранён: {created_files[0]}")
 
         # Финальные метрики
         end_time = time.time()
@@ -354,11 +368,19 @@ def run_identification_pipeline(args, logger, pyannote_key: str, start_time: flo
         logger.debug(f"Результат Identification сохранён: {interim_file}")
 
         # 8) Экспорт в финальный формат
-        logger.info(f"[2/2] 💾 Экспортирую в {args.format.upper()}...")
-        export_agent = ExportAgent(format=args.format)
+        if args.all_formats:
+            logger.info(f"[2/2] 💾 Экспортирую во всех форматах (SRT, JSON, ASS)...")
+        else:
+            logger.info(f"[2/2] 💾 Экспортирую в {args.format.upper()}...")
+        export_agent = ExportAgent(format=args.format, create_all_formats=args.all_formats,
+                                   overwrite_existing=args.overwrite, add_timestamp=args.add_timestamp)
         out_path = Path(args.output)
-        export_agent.run(segments, out_path)
-        logger.info(f"🎉 Готово! Результат сохранён: {out_path}")
+        created_files = export_agent.run(segments, out_path)
+
+        if args.all_formats:
+            logger.info(f"🎉 Готово! Созданы файлы: {[str(f) for f in created_files]}")
+        else:
+            logger.info(f"🎉 Готово! Результат сохранён: {created_files[0]}")
 
         # Финальные метрики
         end_time = time.time()
@@ -569,11 +591,19 @@ def main():
     logger.debug(f"Финальный результат сохранён: {merged_file}")
 
     # 6) ExportAgent → финальный файл (SRT/JSON/ASS)
-    logger.info(f"[5/5] 💾 Экспортирую в {args.format.upper()}...")
-    export_agent = ExportAgent(format=args.format)
+    if args.all_formats:
+        logger.info(f"[5/5] 💾 Экспортирую во всех форматах (SRT, JSON, ASS)...")
+    else:
+        logger.info(f"[5/5] 💾 Экспортирую в {args.format.upper()}...")
+    export_agent = ExportAgent(format=args.format, create_all_formats=args.all_formats,
+                               overwrite_existing=args.overwrite, add_timestamp=args.add_timestamp)
     out_path = Path(args.output)
-    export_agent.run(merged_segments, out_path)
-    logger.info(f"🎉 Готово! Результат сохранён: {out_path}")
+    created_files = export_agent.run(merged_segments, out_path)
+
+    if args.all_formats:
+        logger.info(f"🎉 Готово! Созданы файлы: {[str(f) for f in created_files]}")
+    else:
+        logger.info(f"🎉 Готово! Результат сохранён: {created_files[0]}")
 
     # Финальные метрики
     end_time = time.time()

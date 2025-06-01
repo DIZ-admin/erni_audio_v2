@@ -18,20 +18,22 @@ class IdentificationAgent:
     голосовыми отпечатками (voiceprints).
     """
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, webhook_url: Optional[str] = None):
         """
         Инициализация IdentificationAgent.
-        
+
         Args:
             api_key: API ключ pyannote.ai
+            webhook_url: URL для получения веб-хуков (опционально)
         """
         self.api_key = api_key
+        self.webhook_url = webhook_url
         self.base_url = "https://api.pyannote.ai/v1"
         self.logger = logging.getLogger(__name__)
-        
+
         # Инициализируем медиа агент для загрузки файлов
         self.media_agent = PyannoteMediaAgent(api_key)
-        
+
         self.logger.info("✅ IdentificationAgent инициализирован")
     
     def run(self,
@@ -144,6 +146,10 @@ class IdentificationAgent:
         if confidence:
             data["confidence"] = True
             self.logger.info("📊 Включены confidence scores")
+
+        if self.webhook_url:
+            data["webhook"] = self.webhook_url
+            self.logger.info(f"🔗 Webhook URL добавлен для identification: {self.webhook_url}")
 
         self.logger.debug(f"🔍 Отправляемые данные в API: {data}")
 
@@ -299,3 +305,59 @@ class IdentificationAgent:
             "num_voiceprints": num_voiceprints,
             "note": "Приблизительная оценка, реальная стоимость может отличаться"
         }
+
+    def run_async(self,
+                  audio_file: Path,
+                  voiceprints: List[Dict],
+                  num_speakers: Optional[int] = None,
+                  confidence: bool = True,
+                  matching_threshold: float = 0.0,
+                  exclusive_matching: bool = True) -> str:
+        """
+        Выполняет идентификацию спикеров асинхронно с веб-хуком.
+
+        Args:
+            audio_file: Путь к аудиофайлу или URL
+            voiceprints: Список голосовых отпечатков в формате:
+                        [{"label": "John Doe", "voiceprint": "base64_data"}, ...]
+            num_speakers: Количество спикеров (None для автоопределения)
+            confidence: Включить ли confidence scores
+            matching_threshold: Порог сходства для сопоставления (0.0-1.0)
+            exclusive_matching: Эксклюзивное сопоставление (один voiceprint = один спикер)
+
+        Returns:
+            job_id для отслеживания статуса
+
+        Raises:
+            ValueError: Если webhook_url не настроен
+        """
+        if not self.webhook_url:
+            raise ValueError("webhook_url должен быть настроен для асинхронной обработки")
+
+        try:
+            self.logger.info(f"🚀 Запускаю асинхронную идентификацию для: {audio_file}")
+            self.logger.info(f"👥 Voiceprints: {len(voiceprints)}, порог: {matching_threshold}")
+
+            # Загружаем файл в pyannote.ai временное хранилище
+            self.logger.info("📤 Загружаю файл в pyannote.ai...")
+            media_url = self.media_agent.upload_file(audio_file)
+            self.logger.info(f"✅ Файл загружен: {media_url}")
+
+            # Запускаем identification job с webhook
+            job_id = self._submit_identification_job(
+                media_url=media_url,
+                voiceprints=voiceprints,
+                num_speakers=num_speakers,
+                confidence=confidence,
+                matching_threshold=matching_threshold,
+                exclusive_matching=exclusive_matching
+            )
+
+            self.logger.info(f"✅ Асинхронная идентификация запущена: {job_id}")
+            self.logger.info(f"📡 Результат будет отправлен на: {self.webhook_url}")
+
+            return job_id
+
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка запуска асинхронной идентификации: {e}")
+            raise

@@ -14,5 +14,9 @@ python-magic>=0.4.27
 # Testing
 pytest>=7.4.0
 
+# Webhook server dependencies
+fastapi>=0.104.0
+uvicorn>=0.24.0
+
 # Optional: For better audio format support
 # ffmpeg-python>=0.2.0  # Uncomment if you need programmatic ffmpeg access

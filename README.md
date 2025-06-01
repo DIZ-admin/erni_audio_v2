@@ -19,6 +19,7 @@
 - 💰 **Оценка стоимости**: Предварительный расчет затрат на транскрипцию
 - 🔒 **Безопасность**: Валидация файлов, rate limiting, secure upload
 - 📊 **Мониторинг**: Health checks, метрики производительности
+- 🔗 **Веб-хуки**: Асинхронная обработка с уведомлениями pyannote.ai
 
 ## 🏗️ Архитектура
 
@@ -35,6 +36,7 @@ AudioLoaderAgent → DiarizationAgent → TranscriptionAgent → MergeAgent → 
 3. **TranscriptionAgent**: Транскрипция через OpenAI Whisper API
 4. **MergeAgent**: Объединение результатов диаризации и транскрипции
 5. **ExportAgent**: Экспорт в различные форматы
+6. **WebhookAgent**: Обработка веб-хуков pyannote.ai для асинхронной работы
 
 ## 🚀 Быстрый старт
 
@@ -145,6 +147,12 @@ python speech_pipeline.py meeting.wav \
 python speech_pipeline.py dummy.wav \
   --remote-wav-url https://example.com/audio.wav \
   --format srt -o result.srt
+
+# Асинхронная обработка с веб-хуками
+python webhook_server_cli.py &  # Запуск webhook сервера
+python speech_pipeline.py audio.wav \
+  --async-webhook http://localhost:8000/webhook \
+  --format srt -o result.srt
 ```
 
 ### Параметры командной строки
@@ -164,6 +172,7 @@ python speech_pipeline.py dummy.wav \
 | `--use-identification` | Идентификация через voiceprints | `--use-identification` |
 | `--voiceprints` | Список имен voiceprints | `--voiceprints "John,Jane"` |
 | `--matching-threshold` | Порог сходства voiceprints | `--matching-threshold 0.5` |
+| `--async-webhook` | URL для асинхронной обработки | `--async-webhook http://localhost:8000/webhook` |
 
 ## 🎯 Методы обработки
 
@@ -294,6 +303,11 @@ LOG_LEVEL=INFO
 STRICT_MIME_VALIDATION=true
 REQUIRE_HTTPS_URLS=true
 ENABLE_RATE_LIMITING=true
+
+# Веб-хуки (опционально)
+PYANNOTEAI_WEBHOOK_SECRET=your_webhook_secret_here
+WEBHOOK_SERVER_PORT=8000
+WEBHOOK_SERVER_HOST=0.0.0.0
 ```
 
 ### Поддерживаемые форматы
@@ -307,6 +321,64 @@ ENABLE_RATE_LIMITING=true
 - **SRT**: Стандартные субтитры
 - **ASS**: Продвинутые субтитры для видео
 - **JSON**: Структурированные данные с метаданными
+
+## 🔗 Веб-хуки (Асинхронная обработка)
+
+Speech Pipeline поддерживает веб-хуки pyannote.ai для асинхронной обработки задач, что значительно улучшает производительность.
+
+### 🚀 Быстрый старт с веб-хуками
+
+```bash
+# 1. Запуск webhook сервера
+python webhook_server_cli.py
+
+# 2. Асинхронная обработка (в другом терминале)
+python speech_pipeline.py audio.wav \
+  --async-webhook http://localhost:8000/webhook \
+  --format srt -o result.srt
+```
+
+### ⚡ Преимущества веб-хуков
+
+- **Быстрее**: Мгновенные уведомления вместо polling
+- **Эффективнее**: Меньше API запросов
+- **Надежнее**: Автоматические повторы при сбоях
+- **Безопаснее**: Верификация подписи HMAC-SHA256
+
+### 📋 Настройка веб-хуков
+
+1. **Получите webhook секрет** в [dashboard.pyannote.ai](https://dashboard.pyannote.ai) → Webhooks
+2. **Добавьте в .env**:
+   ```env
+   PYANNOTEAI_WEBHOOK_SECRET=whs_your_secret_here
+   ```
+3. **Запустите webhook сервер**:
+   ```bash
+   python webhook_server_cli.py --port 8000
+   ```
+
+### 🔧 Команды webhook сервера
+
+```bash
+# Базовый запуск
+python webhook_server_cli.py
+
+# Режим отладки
+python webhook_server_cli.py --debug
+
+# Кастомный порт
+python webhook_server_cli.py --port 9000
+
+# Health check
+curl http://localhost:8000/health
+
+# Метрики
+curl http://localhost:8000/metrics
+```
+
+### 📚 Подробная документация
+
+Полное руководство по веб-хукам: [docs/guides/WEBHOOK_GUIDE.md](docs/guides/WEBHOOK_GUIDE.md)
 
 ## 🔧 API ключи
 
@@ -377,6 +449,8 @@ speech-pipeline/
 │   ├── voiceprint_agent.py     # Создание voiceprints
 │   ├── identification_agent.py # Идентификация спикеров
 │   ├── voiceprint_manager.py   # Управление voiceprints
+│   ├── webhook_agent.py        # Обработка веб-хуков
+│   ├── webhook_server.py       # HTTP сервер для веб-хуков
 │   ├── merge_agent.py          # Объединение
 │   └── export_agent.py         # Экспорт
 ├── data/                       # Данные
@@ -386,11 +460,17 @@ speech-pipeline/
 ├── voiceprints/                # База голосовых отпечатков
 │   └── voiceprints.json        # JSON база данных
 ├── docs/                       # Документация
-│   └── VOICEPRINT_GUIDE.md     # Руководство по voiceprints
+│   ├── guides/
+│   │   ├── VOICEPRINT_GUIDE.md # Руководство по voiceprints
+│   │   └── WEBHOOK_GUIDE.md    # Руководство по веб-хукам
 ├── tests/                      # Тесты
+│   ├── test_webhook_agent.py   # Тесты веб-хуков
+│   ├── test_webhook_server.py  # Тесты HTTP сервера
+│   └── test_webhook_integration.py # Интеграционные тесты
 ├── logs/                       # Логи
 ├── speech_pipeline.py          # Главный скрипт
 ├── voiceprint_cli.py           # CLI для voiceprints
+├── webhook_server_cli.py       # CLI для webhook сервера
 ├── health_check.py             # Диагностика
 ├── requirements.txt            # Зависимости
 ├── .env.example               # Пример конфигурации

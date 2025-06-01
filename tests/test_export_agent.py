@@ -6,13 +6,20 @@ from pipeline.export_agent import ExportAgent
 def test_init():
     agent = ExportAgent(format="srt")
     assert agent.format == "srt"
-    
+    assert agent.create_all_formats == False
+
     agent = ExportAgent(format="json")
     assert agent.format == "json"
-    
+    assert agent.create_all_formats == False
+
     agent = ExportAgent(format="ass")
     assert agent.format == "ass"
-    
+    assert agent.create_all_formats == False
+
+    agent = ExportAgent(format="srt", create_all_formats=True)
+    assert agent.format == "srt"
+    assert agent.create_all_formats == True
+
     with pytest.raises(AssertionError):
         ExportAgent(format="invalid")
 
@@ -24,6 +31,24 @@ def test_ts_srt():
 def test_ts_ass():
     agent = ExportAgent()
     assert agent._ts_ass(3661.5) == "1:01:01.50"
+
+def test_ensure_correct_extension():
+    agent = ExportAgent()
+
+    # Тест для SRT
+    assert agent._ensure_correct_extension(Path("test"), "srt") == Path("test.srt")
+    assert agent._ensure_correct_extension(Path("test.srt"), "srt") == Path("test.srt")
+    assert agent._ensure_correct_extension(Path("test.txt"), "srt") == Path("test.srt")
+
+    # Тест для JSON
+    assert agent._ensure_correct_extension(Path("test"), "json") == Path("test.json")
+    assert agent._ensure_correct_extension(Path("test.json"), "json") == Path("test.json")
+    assert agent._ensure_correct_extension(Path("test.txt"), "json") == Path("test.json")
+
+    # Тест для ASS
+    assert agent._ensure_correct_extension(Path("test"), "ass") == Path("test.ass")
+    assert agent._ensure_correct_extension(Path("test.ass"), "ass") == Path("test.ass")
+    assert agent._ensure_correct_extension(Path("test.txt"), "ass") == Path("test.ass")
     assert agent._ts_ass(0.123) == "0:00:00.12"  # 0.123 секунды = 12.3 сантисекунды = 12 cs
     assert agent._ts_ass(0.01) == "0:00:00.01"   # 0.01 секунды = 1 сантисекунда
 
@@ -86,7 +111,41 @@ def test_run_json():
 def test_run_ass():
     agent = ExportAgent(format="ass")
     segs = [{"start": 0, "end": 1, "speaker": "SPEAKER_00", "text": "Hello"}]
-    
+
     with patch.object(agent, 'write_ass') as mock_write:
-        agent.run(segs, Path("output.ass"))
+        created_files = agent.run(segs, Path("output.ass"))
         mock_write.assert_called_once_with(segs, Path("output.ass"))
+        assert len(created_files) == 1
+
+def test_run_create_all_formats():
+    agent = ExportAgent(format="srt", create_all_formats=True)
+    segs = [{"start": 0, "end": 1, "speaker": "SPEAKER_00", "text": "Hello"}]
+
+    with patch.object(agent, 'write_srt') as mock_srt, \
+         patch.object(agent, 'write_json') as mock_json, \
+         patch.object(agent, 'write_ass') as mock_ass:
+
+        created_files = agent.run(segs, Path("output"))
+
+        # Проверяем, что все три метода были вызваны
+        mock_srt.assert_called_once_with(segs, Path("output.srt"))
+        mock_json.assert_called_once_with(segs, Path("output.json"))
+        mock_ass.assert_called_once_with(segs, Path("output.ass"))
+
+        # Проверяем, что возвращены все три файла
+        assert len(created_files) == 3
+        assert Path("output.srt") in created_files
+        assert Path("output.json") in created_files
+        assert Path("output.ass") in created_files
+
+def test_run_with_extension_correction():
+    agent = ExportAgent(format="srt")
+    segs = [{"start": 0, "end": 1, "speaker": "SPEAKER_00", "text": "Hello"}]
+
+    with patch.object(agent, 'write_srt') as mock_write:
+        # Передаем файл без расширения
+        created_files = agent.run(segs, Path("output"))
+        # Должен быть вызван с правильным расширением
+        mock_write.assert_called_once_with(segs, Path("output.srt"))
+        assert len(created_files) == 1
+        assert created_files[0] == Path("output.srt")
