@@ -4,7 +4,7 @@
 
 import json
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List, Union
 
 
 def load_json(path: Path) -> Dict[str, Any]:
@@ -21,12 +21,12 @@ def load_json(path: Path) -> Dict[str, Any]:
         return json.load(f)
 
 
-def save_json(data: Dict[str, Any], path: Path) -> None:
+def save_json(data: Union[Dict[str, Any], List[Any]], path: Path) -> None:
     """
-    Сохраняет словарь в JSON-файл.
-    
+    Сохраняет данные в JSON-файл.
+
     Args:
-        data: Словарь для сохранения
+        data: Данные для сохранения (словарь или список)
         path: Путь к JSON-файлу
     """
     with open(path, 'w', encoding='utf-8') as f:

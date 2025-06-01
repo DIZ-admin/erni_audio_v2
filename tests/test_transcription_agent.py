@@ -5,8 +5,9 @@ from pipeline.transcription_agent import TranscriptionAgent
 import openai
 
 def test_init():
-    agent = TranscriptionAgent(api_key="test_key", model="whisper-2")
-    assert agent.model == "whisper-2"
+    # Используем существующую модель
+    agent = TranscriptionAgent(api_key="test_key", model="gpt-4o-transcribe")
+    assert agent.model == "gpt-4o-transcribe"
     assert agent.client is not None
 
 def test_run():

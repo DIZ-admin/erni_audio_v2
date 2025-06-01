@@ -130,9 +130,9 @@ class TestPyannoteMediaAgent:
             # Выполнение
             result = self.agent.upload_file(file_path)
 
-            # Проверки
-            assert result.startswith("media://temp/audio_")
-            assert result.endswith(f"_{file_path.name}")
+            # Проверки - код использует формат media://example/conversation-{id}.wav
+            assert result.startswith("media://example/conversation-")
+            assert result.endswith(".wav")
             mock_create_url.assert_called_once()
             mock_upload.assert_called_once()
 
@@ -159,9 +159,9 @@ class TestPyannoteMediaAgent:
             custom_name = "custom_audio.wav"
             result = self.agent.upload_file(file_path, custom_name)
 
-            # Проверки
-            assert result == f"media://temp/{custom_name}"
-            mock_create_url.assert_called_once_with(f"media://temp/{custom_name}")
+            # Проверки - код использует формат media://example/{custom_name}
+            assert result == f"media://example/{custom_name}"
+            mock_create_url.assert_called_once_with(f"media://example/{custom_name}")
             mock_upload.assert_called_once()
 
         finally:

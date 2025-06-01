@@ -52,6 +52,17 @@ class TranscriptionConfig:
 
 
 @dataclass
+class ReplicateConfig:
+    """Конфигурация для Replicate whisper-diarization"""
+    enabled: bool = False  # Использовать ли Replicate вместо стандартного пайплайна
+    api_token: Optional[str] = None  # API токен Replicate
+    num_speakers: Optional[int] = None  # Количество спикеров (None для автоопределения)
+    language: Optional[str] = None  # Код языка ('en', 'de', 'ru', etc.)
+    prompt: Optional[str] = None  # Подсказка с именами и терминами
+    model_name: str = "thomasmol/whisper-diarization"  # Модель Replicate
+
+
+@dataclass
 class PipelineConfig:
     """Основная конфигурация пайплайна"""
     # Пути
@@ -81,10 +92,15 @@ class PipelineConfig:
     # Транскрипция
     transcription: TranscriptionConfig = None
 
+    # Replicate
+    replicate: ReplicateConfig = None
+
     def __post_init__(self):
         """Инициализация после создания объекта"""
         if self.transcription is None:
             self.transcription = TranscriptionConfig()
+        if self.replicate is None:
+            self.replicate = ReplicateConfig()
 
 
 class ConfigurationManager(ConfigurationInterface):
@@ -136,7 +152,11 @@ class ConfigurationManager(ConfigurationInterface):
         # Проверяем API ключи
         required_keys = ["OPENAI_API_KEY", "PYANNOTE_API_KEY"]
         missing_keys = [key for key in required_keys if not os.getenv(key)]
-        
+
+        # Replicate API ключ опциональный
+        if self._config.replicate.enabled and not os.getenv("REPLICATE_API_TOKEN"):
+            missing_keys.append("REPLICATE_API_TOKEN")
+
         if missing_keys:
             raise ConfigurationError(f"Отсутствуют обязательные переменные окружения: {missing_keys}")
         
@@ -156,21 +176,22 @@ class ConfigurationManager(ConfigurationInterface):
         """Получает API ключ для провайдера"""
         key_mapping = {
             "openai": "OPENAI_API_KEY",
-            "pyannote": "PYANNOTE_API_KEY"
+            "pyannote": "PYANNOTE_API_KEY",
+            "replicate": "REPLICATE_API_TOKEN"
         }
-        
+
         env_var = key_mapping.get(provider.lower())
         if not env_var:
             raise ConfigurationError(f"Неизвестный провайдер: {provider}")
-        
+
         api_key = os.getenv(env_var)
         if not api_key:
             raise ConfigurationError(f"Отсутствует API ключ для {provider}: {env_var}")
-        
+
         # Базовая валидация ключа
         if len(api_key) < 10:
             raise ConfigurationError(f"Некорректный формат API ключа для {provider}")
-        
+
         return api_key
     
     def get_timeout(self, operation: str) -> int:
@@ -399,6 +420,42 @@ class ConfigurationManager(ConfigurationInterface):
         error_handler.setLevel(logging.ERROR)
         error_handler.setFormatter(JSONFormatter())
         root_logger.addHandler(error_handler)
+
+    def get_replicate_config(self) -> ReplicateConfig:
+        """Получает конфигурацию Replicate"""
+        return self._config.replicate
+
+    def set_replicate_enabled(self, enabled: bool) -> None:
+        """Включает/выключает использование Replicate"""
+        self._config.replicate.enabled = enabled
+        self.logger.info(f"Replicate {'включен' if enabled else 'выключен'}")
+
+    def is_replicate_enabled(self) -> bool:
+        """Проверяет, включен ли Replicate"""
+        return self._config.replicate.enabled
+
+    def set_replicate_speakers(self, num_speakers: Optional[int]) -> None:
+        """Устанавливает количество спикеров для Replicate"""
+        if num_speakers is not None and not (1 <= num_speakers <= 50):
+            raise ConfigurationError("Количество спикеров должно быть от 1 до 50")
+        self._config.replicate.num_speakers = num_speakers
+        self.logger.info(f"Установлено количество спикеров для Replicate: {num_speakers or 'автоопределение'}")
+
+    def set_replicate_language(self, language: Optional[str]) -> None:
+        """Устанавливает язык для Replicate"""
+        self._config.replicate.language = language
+        if language:
+            self.logger.info(f"Установлен язык для Replicate: {language}")
+        else:
+            self.logger.info("Язык для Replicate сброшен (автоопределение)")
+
+    def set_replicate_prompt(self, prompt: Optional[str]) -> None:
+        """Устанавливает подсказку для Replicate"""
+        self._config.replicate.prompt = prompt
+        if prompt:
+            self.logger.info(f"Установлена подсказка для Replicate: {prompt[:50]}...")
+        else:
+            self.logger.info("Подсказка для Replicate сброшена")
 
 
 # Глобальный экземпляр конфигурации

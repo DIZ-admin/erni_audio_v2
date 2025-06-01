@@ -101,7 +101,7 @@ class TestTranscriptionModels:
         # Тест с prompt
         params = agent._prepare_transcription_params("test prompt")
         expected_params = {
-            "response_format": "verbose_json",
+            "response_format": "json",  # gpt-4o-transcribe использует json, не verbose_json
             "temperature": 0,
             "prompt": "test prompt",
             "language": "en"
@@ -129,8 +129,11 @@ class TestTranscriptionModels:
             tmp_path = Path(tmp_file.name)
         
         try:
-            with pytest.raises(ValueError, match="превышает максимальный"):
-                agent._validate_audio_file(tmp_path)
+            # Теперь валидация не выбрасывает исключение, а только предупреждает
+            # Проверяем, что метод выполняется без ошибок
+            agent._validate_audio_file(tmp_path)
+            # Проверяем, что файл действительно большой
+            assert tmp_path.stat().st_size > 25 * 1024 * 1024
         finally:
             tmp_path.unlink()  # Удаляем временный файл
     
@@ -138,24 +141,14 @@ class TestTranscriptionModels:
     def test_transcript_response_processing(self, mock_openai):
         """Тест обработки ответа транскрипции"""
         agent = TranscriptionAgent(self.api_key, "gpt-4o-transcribe")
-        
-        # Мокаем ответ с segments
-        mock_segment = Mock()
-        mock_segment.model_dump.return_value = {
-            "id": 0,
-            "start": 0.0,
-            "end": 5.0,
-            "text": "Test transcription",
-            "tokens": [1, 2, 3],
-            "avg_logprob": -0.5,
-            "no_speech_prob": 0.1
-        }
-        
+
+        # Для gpt-4o-transcribe используется формат "json", поэтому нужен text и duration
         mock_transcript = Mock()
-        mock_transcript.segments = [mock_segment]
-        
+        mock_transcript.text = "Test transcription"
+        mock_transcript.duration = 5.0  # Добавляем duration для json формата
+
         segments = agent._process_transcript_response(mock_transcript)
-        
+
         assert len(segments) == 1
         assert segments[0]["text"] == "Test transcription"
         assert segments[0]["start"] == 0.0

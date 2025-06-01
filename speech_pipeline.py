@@ -48,6 +48,22 @@ def parse_args():
     p.add_argument("--show-cost-estimate", action="store_true",
                    help="показать оценку стоимости транскрипции для всех моделей")
 
+    # Опции Replicate
+    p.add_argument("--use-replicate", action="store_true",
+                   help="использовать Replicate whisper-diarization вместо стандартного пайплайна (быстрее и дешевле)")
+    p.add_argument("--replicate-speakers", type=int, metavar="N",
+                   help="количество спикеров для Replicate (1-50, по умолчанию автоопределение)")
+
+    # Опции Voiceprint (идентификация спикеров)
+    p.add_argument("--use-identification", action="store_true",
+                   help="использовать идентификацию спикеров через voiceprints вместо обычной диаризации")
+    p.add_argument("--voiceprints", metavar="NAMES",
+                   help="список имен voiceprints через запятую (например: 'John Doe,Jane Smith')")
+    p.add_argument("--matching-threshold", type=float, default=0.0, metavar="FLOAT",
+                   help="порог сходства для сопоставления voiceprints (0.0-1.0, по умолчанию 0.0)")
+    p.add_argument("--exclusive-matching", action="store_true", default=True,
+                   help="эксклюзивное сопоставление (один voiceprint = один спикер)")
+
     # Опции загрузки файлов (только pyannote.ai Media API)
     # Примечание: OneDrive и transfer.sh удалены для повышения безопасности
 
@@ -194,6 +210,172 @@ def show_cost_estimates(file_path: str, transcription_model: str) -> None:
     except Exception as e:
         logger.warning(f"Не удалось рассчитать оценку стоимости: {e}")
 
+def run_replicate_pipeline(args, logger, replicate_key: str, start_time: float):
+    """Запуск упрощенного пайплайна через Replicate"""
+    import time
+    from pipeline.replicate_agent import ReplicateAgent
+    from pipeline.export_agent import ExportAgent
+    from pipeline.utils import save_json
+
+    try:
+        # 1) Валидация входного файла для Replicate
+        if args.input.startswith(('http://', 'https://')):
+            logger.error("❌ Replicate не поддерживает URL. Используйте локальный файл.")
+            sys.exit(1)
+
+        input_path = Path(args.input)
+        if not input_path.exists():
+            logger.error(f"❌ Файл не найден: {input_path}")
+            sys.exit(1)
+
+        # 2) Создание Replicate агента
+        logger.info("🚀 Инициализация Replicate Agent...")
+        replicate_agent = ReplicateAgent(api_token=replicate_key)
+
+        # 3) Показать оценку стоимости для Replicate
+        if args.show_cost_estimate:
+            cost_info = replicate_agent.estimate_cost(input_path)
+            print("\n💰 Оценка стоимости Replicate:")
+            print(f"📁 Размер файла: {cost_info['file_size_mb']} MB")
+            print(f"💵 Примерная стоимость: ${cost_info['estimated_cost_usd']}")
+            print(f"💡 {cost_info['note']}")
+            print()
+
+        # 4) Запуск обработки
+        logger.info(f"[1/2] 🎵 Обрабатываю через Replicate: {input_path.name}")
+
+        segments = replicate_agent.run(
+            audio_file=input_path,
+            num_speakers=args.replicate_speakers,
+            language=args.language,
+            prompt=args.prompt
+        )
+
+        logger.info(f"✅ Replicate обработка завершена: {len(segments)} сегментов")
+
+        # 5) Сохранение промежуточного результата
+        input_name = input_path.stem
+        interim_file = Path("data/interim") / f"{input_name}_replicate.json"
+        save_json(segments, interim_file)
+        logger.debug(f"Результат Replicate сохранён: {interim_file}")
+
+        # 6) Экспорт в финальный формат
+        logger.info(f"[2/2] 💾 Экспортирую в {args.format.upper()}...")
+        export_agent = ExportAgent(format=args.format)
+        out_path = Path(args.output)
+        export_agent.run(segments, out_path)
+        logger.info(f"🎉 Готово! Результат сохранён: {out_path}")
+
+        # Финальные метрики
+        end_time = time.time()
+        total_time = end_time - start_time
+        logger.info("✨ Replicate Pipeline завершён успешно", extra={
+            'total_time_seconds': round(total_time, 2),
+            'total_segments': len(segments),
+            'output_file': str(out_path),
+            'method': 'replicate',
+            'success': True
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка Replicate Pipeline: {e}")
+        sys.exit(1)
+
+def run_identification_pipeline(args, logger, pyannote_key: str, start_time: float):
+    """Запуск пайплайна с идентификацией спикеров через voiceprints"""
+    import time
+    from pipeline.identification_agent import IdentificationAgent
+    from pipeline.voiceprint_manager import VoiceprintManager
+    from pipeline.export_agent import ExportAgent
+    from pipeline.utils import save_json
+
+    try:
+        # 1) Валидация входного файла для идентификации
+        if args.input.startswith(('http://', 'https://')):
+            logger.error("❌ Identification пока не поддерживает URL. Используйте локальный файл.")
+            sys.exit(1)
+
+        input_path = Path(args.input)
+        if not input_path.exists():
+            logger.error(f"❌ Файл не найден: {input_path}")
+            sys.exit(1)
+
+        # 2) Проверка voiceprints
+        if not args.voiceprints:
+            logger.error("❌ Для идентификации необходимо указать --voiceprints")
+            sys.exit(1)
+
+        voiceprint_names = [name.strip() for name in args.voiceprints.split(',')]
+        logger.info(f"👥 Запрошенные voiceprints: {', '.join(voiceprint_names)}")
+
+        # 3) Загрузка voiceprints из базы
+        manager = VoiceprintManager()
+        voiceprints = manager.get_voiceprints_for_identification(voiceprint_names)
+
+        if not voiceprints:
+            logger.error("❌ Не найдено ни одного voiceprint в базе")
+            logger.info("💡 Используйте voiceprint_cli.py для создания voiceprints")
+            sys.exit(1)
+
+        logger.info(f"✅ Загружено {len(voiceprints)} voiceprints из базы")
+
+        # 4) Создание Identification агента
+        logger.info("🚀 Инициализация Identification Agent...")
+        identification_agent = IdentificationAgent(api_key=pyannote_key)
+
+        # 5) Показать оценку стоимости если запрошено
+        if args.show_cost_estimate:
+            cost_info = identification_agent.estimate_cost(input_path, len(voiceprints))
+            print(f"\n💰 Оценка стоимости Identification:")
+            print(f"📁 Размер файла: {cost_info['file_size_mb']} MB")
+            print(f"👥 Voiceprints: {cost_info['num_voiceprints']}")
+            print(f"💵 Примерная стоимость: ${cost_info['estimated_cost_usd']}")
+            print(f"💡 {cost_info['note']}")
+            print()
+
+        # 6) Запуск идентификации
+        logger.info(f"[1/2] 🎵 Обрабатываю через Identification: {input_path.name}")
+
+        segments = identification_agent.run(
+            audio_file=input_path,
+            voiceprints=voiceprints,
+            num_speakers=getattr(args, 'replicate_speakers', None),  # Используем тот же параметр
+            confidence=True,
+            matching_threshold=args.matching_threshold,
+            exclusive_matching=args.exclusive_matching
+        )
+
+        logger.info(f"✅ Identification завершена: {len(segments)} сегментов")
+
+        # 7) Сохранение промежуточного результата
+        input_name = input_path.stem
+        interim_file = Path("data/interim") / f"{input_name}_identification.json"
+        save_json(segments, interim_file)
+        logger.debug(f"Результат Identification сохранён: {interim_file}")
+
+        # 8) Экспорт в финальный формат
+        logger.info(f"[2/2] 💾 Экспортирую в {args.format.upper()}...")
+        export_agent = ExportAgent(format=args.format)
+        out_path = Path(args.output)
+        export_agent.run(segments, out_path)
+        logger.info(f"🎉 Готово! Результат сохранён: {out_path}")
+
+        # Финальные метрики
+        end_time = time.time()
+        total_time = end_time - start_time
+        logger.info("✨ Identification Pipeline завершён успешно", extra={
+            'total_time_seconds': round(total_time, 2),
+            'total_segments': len(segments),
+            'output_file': str(out_path),
+            'method': 'identification',
+            'voiceprints_used': len(voiceprints),
+            'success': True
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка Identification Pipeline: {e}")
+        sys.exit(1)
+
 def main():
     import time
     start_time = time.time()
@@ -222,8 +404,22 @@ def main():
             show_cost_estimates(args.input, args.transcription_model)
 
         # 3) Проверка обязательных окружений
-        PYANNOTE_KEY = os.getenv("PYANNOTEAI_API_TOKEN") or os.getenv("PYANNOTE_API_KEY") or sys_exit("Missing PYANNOTEAI_API_TOKEN or PYANNOTE_API_KEY")
-        OPENAI_KEY   = os.getenv("OPENAI_API_KEY")   or sys_exit("Missing OPENAI_API_KEY")
+        REPLICATE_KEY = None
+        PYANNOTE_KEY = None
+        OPENAI_KEY = None
+
+        if args.use_replicate:
+            # Для Replicate нужен только его API токен
+            REPLICATE_KEY = os.getenv("REPLICATE_API_TOKEN") or sys_exit("Missing REPLICATE_API_TOKEN для --use-replicate")
+            logger.info("🔄 Режим Replicate: используется thomasmol/whisper-diarization")
+        elif args.use_identification:
+            # Для идентификации нужен только pyannote.ai ключ
+            PYANNOTE_KEY = os.getenv("PYANNOTEAI_API_TOKEN") or os.getenv("PYANNOTE_API_KEY") or sys_exit("Missing PYANNOTEAI_API_TOKEN or PYANNOTE_API_KEY для --use-identification")
+            logger.info("🔄 Режим идентификации: используется pyannote.ai identification")
+        else:
+            # Для стандартного пайплайна нужны оба ключа
+            PYANNOTE_KEY = os.getenv("PYANNOTEAI_API_TOKEN") or os.getenv("PYANNOTE_API_KEY") or sys_exit("Missing PYANNOTEAI_API_TOKEN or PYANNOTE_API_KEY")
+            OPENAI_KEY   = os.getenv("OPENAI_API_KEY")   or sys_exit("Missing OPENAI_API_KEY")
 
         # 4) Логируем выбранную модель транскрипции
         from pipeline.transcription_agent import TranscriptionAgent
@@ -238,6 +434,18 @@ def main():
     except Exception as e:
         logger.error(f"Неожиданная ошибка при инициализации: {e}")
         sys.exit(1)
+
+    # Если используется Replicate, запускаем упрощенный пайплайн
+    if args.use_replicate:
+        if not REPLICATE_KEY:
+            sys_exit("REPLICATE_KEY не установлен")
+        return run_replicate_pipeline(args, logger, REPLICATE_KEY, start_time)
+
+    # Если используется идентификация, запускаем пайплайн с identification
+    if args.use_identification:
+        if not PYANNOTE_KEY:
+            sys_exit("PYANNOTE_KEY не установлен")
+        return run_identification_pipeline(args, logger, PYANNOTE_KEY, start_time)
 
     # 2) AudioLoaderAgent → (wav_local, wav_url)
     logger.info(f"[1/5] 🎵 Конвертирую аудио: {args.input}")

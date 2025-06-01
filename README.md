@@ -122,15 +122,28 @@ python speech_pipeline.py audio.wav --show-cost-estimate
 ### Продвинутые возможности
 
 ```bash
+# Replicate (быстро и дешево)
+python speech_pipeline.py audio.wav \
+  --use-replicate \
+  --language de \
+  --replicate-speakers 2 \
+  --format srt -o result.srt
+
+# Идентификация спикеров через voiceprints
+# 1. Создать voiceprints
+python voiceprint_cli.py create john_sample.wav "John Doe"
+python voiceprint_cli.py create jane_sample.wav "Jane Smith"
+
+# 2. Использовать для идентификации
+python speech_pipeline.py meeting.wav \
+  --use-identification \
+  --voiceprints "John Doe,Jane Smith" \
+  --matching-threshold 0.5 \
+  --format srt -o result.srt
+
 # Обработка удаленного файла
 python speech_pipeline.py dummy.wav \
   --remote-wav-url https://example.com/audio.wav \
-  --format srt -o result.srt
-
-# Идентификация спикеров по голосовым отпечаткам
-python speech_pipeline.py audio.wav \
-  --voiceprints-dir ./voiceprints \
-  --identify speaker1,speaker2 \
   --format srt -o result.srt
 ```
 
@@ -146,8 +159,38 @@ python speech_pipeline.py audio.wav \
 | `--show-cost-estimate` | Показать оценку стоимости | `--show-cost-estimate` |
 | `--prompt` | Контекстная подсказка | `--prompt "Technical discussion"` |
 | `--remote-wav-url` | URL удаленного файла | `--remote-wav-url https://...` |
-| `--voiceprints-dir` | Папка с голосовыми отпечатками | `--voiceprints-dir ./voices` |
-| `--identify` | ID голосовых отпечатков | `--identify speaker1,speaker2` |
+| `--use-replicate` | Использовать Replicate API | `--use-replicate` |
+| `--replicate-speakers` | Количество спикеров для Replicate | `--replicate-speakers 2` |
+| `--use-identification` | Идентификация через voiceprints | `--use-identification` |
+| `--voiceprints` | Список имен voiceprints | `--voiceprints "John,Jane"` |
+| `--matching-threshold` | Порог сходства voiceprints | `--matching-threshold 0.5` |
+
+## 🎯 Методы обработки
+
+Speech Pipeline предлагает три различных метода обработки аудио:
+
+### 📊 Сравнение методов
+
+| Метод | Скорость | Точность | Стоимость | Сложность | Рекомендации |
+|-------|----------|----------|-----------|-----------|--------------|
+| **Стандартный** | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐ | Универсальное решение |
+| **Replicate** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐ | Быстро и дешево |
+| **Voiceprint** | ⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ | Точная идентификация |
+
+### 🚀 Replicate (рекомендуется)
+- **Преимущества**: В 2 раза быстрее, в 167 раз дешевле
+- **Технологии**: Whisper Large V3 Turbo + Pyannote 3.3.1
+- **Использование**: `--use-replicate`
+
+### 🎯 Voiceprint идентификация
+- **Преимущества**: Точная идентификация известных спикеров
+- **Требования**: Предварительное создание voiceprints
+- **Использование**: `--use-identification --voiceprints "Name1,Name2"`
+
+### 🔧 Стандартный метод
+- **Преимущества**: Полный контроль, настраиваемость
+- **Технологии**: pyannote.ai + OpenAI API
+- **Использование**: По умолчанию
 
 ## 🎯 Модели транскрипции
 
@@ -239,6 +282,9 @@ python speech_pipeline.py audio.wav --transcription-model whisper-1
 PYANNOTEAI_API_TOKEN=your_token_here
 OPENAI_API_KEY=your_key_here
 
+# Дополнительные API ключи (опционально)
+REPLICATE_API_TOKEN=your_replicate_token_here
+
 # Производительность
 MAX_FILE_SIZE_MB=300
 MAX_CONCURRENT_JOBS=3
@@ -278,6 +324,13 @@ ENABLE_RATE_LIMITING=true
 3. Создайте новый секретный ключ
 4. Скопируйте в `OPENAI_API_KEY`
 
+### Получение Replicate API ключа (опционально)
+
+1. Зарегистрируйтесь на [replicate.com](https://replicate.com)
+2. Перейдите в Account Settings → API tokens
+3. Создайте новый токен
+4. Скопируйте в `REPLICATE_API_TOKEN`
+
 ## 🏥 Мониторинг и диагностика
 
 ### Health Check
@@ -316,23 +369,32 @@ pytest tests/test_audio_agent.py
 
 ```
 speech-pipeline/
-├── pipeline/                 # Основные модули
-│   ├── audio_agent.py       # Обработка аудио
-│   ├── diarization_agent.py # Диаризация
-│   ├── transcription_agent.py # Транскрипция
-│   ├── merge_agent.py       # Объединение
-│   └── export_agent.py      # Экспорт
-├── data/                    # Данные
-│   ├── raw/                 # Исходные файлы
-│   ├── interim/             # Промежуточные результаты
-│   └── processed/           # Готовые результаты
-├── tests/                   # Тесты
-├── logs/                    # Логи
-├── speech_pipeline.py       # Главный скрипт
-├── health_check.py          # Диагностика
-├── requirements.txt         # Зависимости
-├── .env.example            # Пример конфигурации
-└── README.md               # Документация
+├── pipeline/                    # Основные модули
+│   ├── audio_agent.py          # Обработка аудио
+│   ├── diarization_agent.py    # Диаризация
+│   ├── transcription_agent.py  # Транскрипция
+│   ├── replicate_agent.py      # Replicate API
+│   ├── voiceprint_agent.py     # Создание voiceprints
+│   ├── identification_agent.py # Идентификация спикеров
+│   ├── voiceprint_manager.py   # Управление voiceprints
+│   ├── merge_agent.py          # Объединение
+│   └── export_agent.py         # Экспорт
+├── data/                       # Данные
+│   ├── raw/                    # Исходные файлы
+│   ├── interim/                # Промежуточные результаты
+│   └── processed/              # Готовые результаты
+├── voiceprints/                # База голосовых отпечатков
+│   └── voiceprints.json        # JSON база данных
+├── docs/                       # Документация
+│   └── VOICEPRINT_GUIDE.md     # Руководство по voiceprints
+├── tests/                      # Тесты
+├── logs/                       # Логи
+├── speech_pipeline.py          # Главный скрипт
+├── voiceprint_cli.py           # CLI для voiceprints
+├── health_check.py             # Диагностика
+├── requirements.txt            # Зависимости
+├── .env.example               # Пример конфигурации
+└── README.md                  # Документация
 ```
 
 ## 🔒 Безопасность

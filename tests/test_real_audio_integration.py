@@ -176,7 +176,7 @@ class TestRealAudioPipeline:
         
         mock_get.return_value.json.return_value = {
             "status": "completed",
-            "result": {
+            "output": {
                 "diarization": mock_diarization_result
             }
         }
@@ -271,11 +271,24 @@ class TestRealAudioPipeline:
         # Мокируем ответ API
         mock_response = MagicMock()
         mock_response.segments = []
+        mock_response.duration = 5520.0  # Добавляем duration как число
         for seg in mock_transcription_segments:
             mock_segment = MagicMock()
             mock_segment.start = seg["start"]
             mock_segment.end = seg["end"]
             mock_segment.text = seg["text"]
+            # Добавляем model_dump для совместимости с кодом
+            mock_segment.model_dump.return_value = {
+                "id": 0,
+                "start": seg["start"],
+                "end": seg["end"],
+                "text": seg["text"],
+                "tokens": [],
+                "avg_logprob": -0.1,
+                "no_speech_prob": 0.01,
+                "temperature": 0,
+                "compression_ratio": 1.0
+            }
             mock_response.segments.append(mock_segment)
 
         mock_client.audio.transcriptions.create.return_value = mock_response
@@ -385,8 +398,11 @@ class TestRealAudioPipeline:
         for format_name in export_formats:
             export_agent = ExportAgent(format_name)
 
+            # Создаем путь к выходному файлу
+            output_path = Path(f"test_output.{format_name}")
+
             start_time = time.time()
-            output_path = export_agent.run(merged_segments, f"test_output.{format_name}")
+            export_agent.run(merged_segments, output_path)
             export_time = time.time() - start_time
 
             # Проверяем, что файл создан

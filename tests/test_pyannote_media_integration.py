@@ -114,7 +114,7 @@ class TestPyannoteMediaIntegration:
         mock_poll_response = Mock()
         mock_poll_response.json.return_value = {
             "status": "done",
-            "result": {
+            "output": {
                 "diarization": [
                     {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00", "confidence": 0.95}
                 ]
@@ -158,7 +158,7 @@ class TestPyannoteMediaIntegration:
         mock_poll_response = Mock()
         mock_poll_response.json.return_value = {
             "status": "done",
-            "result": {
+            "output": {
                 "diarization": [
                     {"start": 0.0, "end": 3.0, "speaker": "SPEAKER_01", "confidence": 0.88}
                 ]

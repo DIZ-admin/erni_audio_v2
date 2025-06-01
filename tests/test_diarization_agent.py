@@ -14,7 +14,7 @@ def test_poll():
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "status": "completed",
-            "result": {"diarization": [{"start": 0, "end": 1, "speaker": "SPEAKER_00"}]}
+            "output": {"diarization": [{"start": 0, "end": 1, "speaker": "SPEAKER_00"}]}
         }
         mock_response.raise_for_status = MagicMock()
         mock_get.return_value = mock_response
