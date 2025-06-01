@@ -9,7 +9,10 @@ import time
 import subprocess
 import tempfile
 import uuid
+import random
 from pydub import AudioSegment
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
+from .config import ConfigurationManager
 
 class TranscriptionAgent:
     """
@@ -66,10 +69,96 @@ class TranscriptionAgent:
         self.response_format = self._determine_response_format(response_format)
         self.logger = logging.getLogger(__name__)
 
+        # Загружаем конфигурацию для retry
+        self.config = ConfigurationManager()
+        self.retry_config = self.config.get_retry_config("transcription")
+
+        # Статистика retry для мониторинга
+        self.retry_stats = {
+            "total_attempts": 0,
+            "rate_limit_retries": 0,
+            "connection_retries": 0,
+            "other_retries": 0,
+            "total_retry_time": 0.0
+        }
+
         # Логируем выбранную модель
         model_info = self.SUPPORTED_MODELS[self.model]
         self.logger.info(f"Инициализирован TranscriptionAgent с моделью: {model_info['name']} ({model_info['description']})")
-        self.logger.info(f"Формат ответа: {self.response_format}")
+
+    def _get_adaptive_timeout(self, file_size_mb: float) -> float:
+        """
+        Вычисляет адаптивный таймаут на основе размера файла.
+
+        Args:
+            file_size_mb: Размер файла в мегабайтах
+
+        Returns:
+            Таймаут в секундах
+        """
+        # Базовый таймаут 60 секунд + 10 секунд на каждый MB
+        base_timeout = 60
+        size_factor = max(1.0, file_size_mb * 10)
+        adaptive_timeout = min(base_timeout + size_factor, 600)  # Максимум 10 минут
+
+        self.logger.debug(f"Адаптивный таймаут для файла {file_size_mb:.1f}MB: {adaptive_timeout:.1f}с")
+        return adaptive_timeout
+
+    def _intelligent_wait_strategy(self, retry_state):
+        """
+        Интеллектуальная стратегия ожидания с различной логикой для разных типов ошибок.
+        """
+        exception = retry_state.outcome.exception()
+        attempt = retry_state.attempt_number
+
+        if isinstance(exception, openai.RateLimitError):
+            # Для rate limit - экспоненциальный backoff с jitter
+            base_delay = 2.0
+            max_delay = 120.0  # 2 минуты максимум
+
+            # Экспоненциальный backoff с jitter
+            delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+            jitter = random.uniform(0.1, 0.3) * delay
+            final_delay = delay + jitter
+
+            self.logger.warning(
+                f"🔄 Rate limit hit (попытка {attempt}), ждем {final_delay:.1f}с "
+                f"(base: {delay:.1f}с, jitter: {jitter:.1f}с)"
+            )
+
+        elif isinstance(exception, openai.APIConnectionError):
+            # Для сетевых ошибок - быстрые повторы
+            base_delay = 0.5
+            final_delay = min(base_delay * attempt, 10.0)  # Максимум 10 секунд
+
+            self.logger.warning(
+                f"🌐 Сетевая ошибка (попытка {attempt}), быстрый повтор через {final_delay:.1f}с"
+            )
+
+        else:
+            # Для других ошибок - стандартный backoff
+            base_delay = 1.0
+            final_delay = min(base_delay * (1.5 ** (attempt - 1)), 60.0)
+
+            self.logger.warning(
+                f"⚠️ Другая ошибка (попытка {attempt}), повтор через {final_delay:.1f}с: {type(exception).__name__}"
+            )
+
+        # Обновляем общее время retry
+        self.retry_stats["total_retry_time"] += final_delay
+
+        return final_delay
+
+    def _log_retry_statistics(self):
+        """Логирует статистику retry для мониторинга производительности."""
+        if self.retry_stats["total_attempts"] > 0:
+            self.logger.info(
+                f"📊 Статистика retry: всего попыток={self.retry_stats['total_attempts']}, "
+                f"rate_limit={self.retry_stats['rate_limit_retries']}, "
+                f"connection={self.retry_stats['connection_retries']}, "
+                f"other={self.retry_stats['other_retries']}, "
+                f"общее время retry={self.retry_stats['total_retry_time']:.1f}с"
+            )
 
     # Поддерживаемые форматы ответа
     SUPPORTED_RESPONSE_FORMATS = {
@@ -210,38 +299,72 @@ class TranscriptionAgent:
             raise RuntimeError(f"Не удалось разбить файл: {e}") from e
 
     def _transcribe_single_file(self, wav_local: Path, prompt: str = "") -> List[Dict]:
-        """Транскрибирует один файл."""
+        """Транскрибирует один файл с улучшенной retry логикой."""
         start_time = time.time()
+        file_size_mb = wav_local.stat().st_size / (1024 * 1024)
+
+        # Получаем адаптивный таймаут
+        adaptive_timeout = self._get_adaptive_timeout(file_size_mb)
 
         # Подготовка параметров запроса
         transcription_params = self._prepare_transcription_params(prompt)
 
-        with open(wav_local, "rb") as audio_file:
-            transcript = self.client.audio.transcriptions.create(
-                model=self.model,
-                file=audio_file,
-                **transcription_params
-            )
+        # Вызываем метод с retry логикой
+        result = self._transcribe_with_intelligent_retry(wav_local, transcription_params, adaptive_timeout)
 
-        # Обработка ответа в зависимости от модели
-        segments = self._process_transcript_response(transcript)
-
-        # Логируем метрики производительности
+        # Логируем статистику
         duration = time.time() - start_time
-        audio_duration = getattr(transcript, 'duration', None)
-        processing_ratio = duration / audio_duration if audio_duration else None
-        file_size_mb = wav_local.stat().st_size / (1024 * 1024)
+        self.logger.info(f"✅ Транскрипция завершена за {duration:.2f}с (файл: {file_size_mb:.1f}MB)")
+        self._log_retry_statistics()
 
-        self.logger.info(f"Транскрипция завершена: {len(segments)} сегментов", extra={
-            'model': self.model,
-            'processing_time': f"{duration:.2f}s",
-            'file_size_mb': f"{file_size_mb:.1f}MB",
-            'processing_ratio': f"{processing_ratio:.2f}x" if processing_ratio else "N/A",
-            'segments_count': len(segments),
-            'audio_duration': f"{audio_duration:.2f}s" if audio_duration else "N/A"
-        })
+        return result
 
-        return segments
+    @retry(
+        stop=stop_after_attempt(8),  # Увеличено с 3 до 8 попыток
+        wait=wait_exponential(multiplier=1, min=1, max=120),  # Экспоненциальный backoff 1-120с
+        retry=retry_if_exception_type((
+            openai.RateLimitError,
+            openai.APIConnectionError,
+            openai.APITimeoutError,
+            openai.InternalServerError
+        )),
+        before_sleep=before_sleep_log(logging.getLogger(__name__), logging.WARNING),
+        reraise=True
+    )
+    def _transcribe_with_intelligent_retry(self, wav_local: Path, transcription_params: Dict, timeout: float) -> List[Dict]:
+        """Выполняет транскрипцию с интеллектуальной retry логикой."""
+        try:
+            # Устанавливаем адаптивный таймаут для клиента
+            client_with_timeout = self.client.with_options(timeout=timeout)
+
+            with open(wav_local, "rb") as audio_file:
+                transcript = client_with_timeout.audio.transcriptions.create(
+                    model=self.model,
+                    file=audio_file,
+                    **transcription_params
+                )
+
+            # Обработка результата
+            return self._process_transcript_response(transcript)
+
+        except (openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError, openai.InternalServerError) as e:
+            # Логируем ошибку для статистики (стратегия retry обрабатывается tenacity)
+            if isinstance(e, openai.RateLimitError):
+                self.retry_stats["rate_limit_retries"] += 1
+            elif isinstance(e, openai.APIConnectionError):
+                self.retry_stats["connection_retries"] += 1
+            else:
+                self.retry_stats["other_retries"] += 1
+
+            self.retry_stats["total_attempts"] += 1
+            raise  # Перебрасываем исключение для tenacity
+
+        except openai.APIStatusError as e:
+            self.logger.error(f"Ошибка OpenAI API (статус {e.status_code}): {e}")
+            if e.status_code == 429:  # Rate limit
+                raise openai.RateLimitError(f"Rate limit: {e}") from e
+            else:
+                raise RuntimeError(f"Ошибка OpenAI API: {e}") from e
 
     def _transcribe_large_file(self, wav_local: Path, prompt: str = "") -> List[Dict]:
         """Транскрибирует большой файл, разбивая его на части."""

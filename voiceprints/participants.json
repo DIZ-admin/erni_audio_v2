@@ -1,0 +1,67 @@
+{
+  "participants": [
+    {
+      "name": "André Arnold",
+      "initials": "AA",
+      "role": "Teilnehmer eGL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_05"
+    },
+    {
+      "name": "Beat Hardegger",
+      "initials": "BH",
+      "role": "Teilnehmer eGL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_02"
+    },
+    {
+      "name": "Petra Zeder",
+      "initials": "ZEP",
+      "role": "Teilnehmer eGL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_00"
+    },
+    {
+      "name": "Stefan Gisler",
+      "initials": "GIS",
+      "role": "Teilnehmer eGL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_07"
+    },
+    {
+      "name": "Peter Henggeler",
+      "initials": "PH",
+      "role": "Sitzungsleiter",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_06"
+    },
+    {
+      "name": "Andreas Wermelinger",
+      "initials": "AW",
+      "role": "Teilnehmer eGL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_04"
+    },
+    {
+      "name": "Alex Keller",
+      "initials": "AK",
+      "role": "Teilnehmer eGL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_03"
+    },
+    {
+      "name": "Tobias Wili",
+      "initials": "TW",
+      "role": "Teilnehmer eGL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "name": "Adi Furrer",
+      "initials": "FUA",
+      "role": "",
+      "status": "Entschuldigt",
+      "speaker": ""
+    }
+  ]
+}
