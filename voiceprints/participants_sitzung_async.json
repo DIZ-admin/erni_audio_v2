@@ -1,0 +1,81 @@
+{
+  "participants": [
+    {
+      "name": "Peter Henkeler",
+      "initials": "PH",
+      "role": "Geschäftsführer und Sitzungsleiter",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_09"
+    },
+    {
+      "name": "Andi Arnold",
+      "initials": "AA",
+      "role": "Spartenleiter der Ähnli Planung, Mitglied der erweiterten GL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_04"
+    },
+    {
+      "name": "Beat Hardegger",
+      "initials": "BH",
+      "role": "Leitung von Kalkulation & Verkauf",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_05"
+    },
+    {
+      "name": "Tobias Wili",
+      "initials": "TW",
+      "role": "Teilnehmer eGL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "name": "Andreas Wermelinger",
+      "initials": "AW",
+      "role": "Teilnehmer eGL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_06"
+    },
+    {
+      "name": "Petra Zeder",
+      "initials": "ZEP",
+      "role": "Teilnehmer eGL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_00"
+    },
+    {
+      "name": "Alex Keller",
+      "initials": "AK",
+      "role": "Teilnehmer eGL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_03"
+    },
+    {
+      "name": "Stefan Gisler",
+      "initials": "GIS",
+      "role": "Teilnehmer eGL",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_07"
+    },
+    {
+      "name": "Неизвестный участник 1",
+      "initials": "SP10",
+      "role": "Гость/Участник",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_10"
+    },
+    {
+      "name": "Неизвестный участник 2",
+      "initials": "SP02",
+      "role": "Гость/Участник",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_02"
+    },
+    {
+      "name": "Неизвестный участник 3",
+      "initials": "SP08",
+      "role": "Гость/Участник",
+      "status": "Anwesend",
+      "speaker": "SPEAKER_08"
+    }
+  ]
+}

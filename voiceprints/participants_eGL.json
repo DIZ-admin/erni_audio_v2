@@ -5,14 +5,14 @@
       "initials": "AA",
       "role": "Teilnehmer eGL",
       "status": "Anwesend",
-      "speaker": "SPEAKER_05"
+      "speaker": "SPEAKER_04"
     },
     {
       "name": "Beat Hardegger",
       "initials": "BH",
       "role": "Teilnehmer eGL",
       "status": "Anwesend",
-      "speaker": "SPEAKER_02"
+      "speaker": "SPEAKER_05"
     },
     {
       "name": "Petra Zeder",
@@ -33,21 +33,21 @@
       "initials": "PH",
       "role": "Sitzungsleiter",
       "status": "Anwesend",
-      "speaker": "SPEAKER_06"
+      "speaker": "SPEAKER_09"
     },
     {
       "name": "Andreas Wermelinger",
       "initials": "AW",
       "role": "Teilnehmer eGL",
       "status": "Anwesend",
-      "speaker": "SPEAKER_04"
+      "speaker": "SPEAKER_06"
     },
     {
       "name": "Alex Keller",
       "initials": "AK",
       "role": "Teilnehmer eGL",
       "status": "Anwesend",
-      "speaker": "SPEAKER_03"
+      "speaker": "SPEAKER_10"
     },
     {
       "name": "Tobias Wili",

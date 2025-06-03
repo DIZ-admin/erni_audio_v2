@@ -36,7 +36,9 @@ def test_run():
         mock_create.return_value = mock_transcript
 
         with patch('builtins.open', MagicMock()), \
-             patch.object(Path, 'stat') as mock_stat:
+             patch.object(Path, 'stat') as mock_stat, \
+             patch.object(Path, 'exists', return_value=True), \
+             patch.object(Path, 'read_bytes', return_value=b'fake audio data'):
             # Мокируем stat для получения размера файла
             mock_stat.return_value.st_size = 1024 * 1024  # 1MB
             result = agent.run(Path("test.wav"), prompt="Test prompt")

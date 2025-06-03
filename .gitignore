@@ -139,3 +139,27 @@ metrics/
 config/production_secrets.json
 config/local.json
 config/*.local.*
+
+# =============================================================================
+# ДОПОЛНИТЕЛЬНЫЕ ВРЕМЕННЫЕ ФАЙЛЫ
+# =============================================================================
+# Конвертированные аудио-файлы
+*_converted.wav
+*_converted.mp3
+*_segment_*.wav
+*_segment_*.mp3
+
+# Промежуточные результаты обработки
+*_diarization.json
+*_transcription.json
+*_merged.json
+*_results.json
+
+# Отчеты и метрики (кроме финальных)
+*_report_*.json
+stress_test_*.log
+stress_test_*.json
+
+# Временные файлы создания референсов
+*_accurate_reference.txt.tmp
+create_references_*.log

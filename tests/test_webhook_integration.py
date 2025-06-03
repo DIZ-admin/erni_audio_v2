@@ -37,12 +37,32 @@ class TestWebhookIntegration:
 
 class TestDiarizationAgentWebhook:
     """Тесты webhook функциональности DiarizationAgent"""
-    
+
+    @pytest.fixture
+    def api_key(self):
+        """Тестовый API ключ"""
+        return "test_api_key_12345"
+
+    @pytest.fixture
+    def webhook_url(self):
+        """Тестовый webhook URL"""
+        return "https://example.com/webhook"
+
+    @pytest.fixture
+    def sample_audio_url(self):
+        """Тестовый URL аудио"""
+        return "media://test-audio-file"
+
+    @pytest.fixture
+    def mock_job_response(self):
+        """Мок ответа API с job ID"""
+        return {"jobId": "test-job-12345"}
+
     @pytest.fixture
     def diarization_agent(self, api_key, webhook_url):
         """Создает DiarizationAgent с webhook URL"""
         return DiarizationAgent(api_key=api_key, webhook_url=webhook_url)
-    
+
     @pytest.fixture
     def diarization_agent_no_webhook(self, api_key):
         """Создает DiarizationAgent без webhook URL"""
@@ -141,12 +161,27 @@ class TestDiarizationAgentWebhook:
 
 class TestVoiceprintAgentWebhook:
     """Тесты webhook функциональности VoiceprintAgent"""
-    
+
+    @pytest.fixture
+    def api_key(self):
+        """Тестовый API ключ"""
+        return "test_api_key_12345"
+
+    @pytest.fixture
+    def webhook_url(self):
+        """Тестовый webhook URL"""
+        return "https://example.com/webhook"
+
+    @pytest.fixture
+    def mock_job_response(self):
+        """Мок ответа API с job ID"""
+        return {"jobId": "test-job-12345"}
+
     @pytest.fixture
     def voiceprint_agent(self, api_key, webhook_url):
         """Создает VoiceprintAgent с webhook URL"""
         return VoiceprintAgent(api_key=api_key, webhook_url=webhook_url)
-    
+
     @pytest.fixture
     def sample_audio_file(self, tmp_path):
         """Создает тестовый аудиофайл"""
@@ -185,12 +220,27 @@ class TestVoiceprintAgentWebhook:
 
 class TestIdentificationAgentWebhook:
     """Тесты webhook функциональности IdentificationAgent"""
-    
+
+    @pytest.fixture
+    def api_key(self):
+        """Тестовый API ключ"""
+        return "test_api_key_12345"
+
+    @pytest.fixture
+    def webhook_url(self):
+        """Тестовый webhook URL"""
+        return "https://example.com/webhook"
+
+    @pytest.fixture
+    def mock_job_response(self):
+        """Мок ответа API с job ID"""
+        return {"jobId": "test-job-12345"}
+
     @pytest.fixture
     def identification_agent(self, api_key, webhook_url):
         """Создает IdentificationAgent с webhook URL"""
         return IdentificationAgent(api_key=api_key, webhook_url=webhook_url)
-    
+
     @pytest.fixture
     def sample_voiceprints(self):
         """Тестовые voiceprints"""
@@ -198,7 +248,7 @@ class TestIdentificationAgentWebhook:
             {"label": "John Doe", "voiceprint": "base64_data_1"},
             {"label": "Jane Smith", "voiceprint": "base64_data_2"}
         ]
-    
+
     @pytest.fixture
     def sample_audio_file(self, tmp_path):
         """Создает тестовый аудиофайл"""
