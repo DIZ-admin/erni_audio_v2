@@ -12,7 +12,7 @@
 ### Для разработчиков
 1. **[🏗️ Архитектура системы](./architecture/ARCHITECTURE_OVERVIEW.md)** - Обзор компонентов
 2. **[🔄 Потоки данных](./architecture/DATA_FLOWS.md)** - Детальные схемы обработки
-3. **[🧪 Руководство по тестированию](./development/TESTING_GUIDE.md)** - Запуск и написание тестов
+3. **[🛠️ Настройка окружения](./development/DEVELOPMENT_SETUP.md)** - Настройка для разработки
 
 ---
 
@@ -20,15 +20,22 @@
 
 ### 🏗️ `/architecture` - Архитектура и дизайн
 - **[ARCHITECTURE_OVERVIEW.md](./architecture/ARCHITECTURE_OVERVIEW.md)** - Общий обзор архитектуры
+- **[ARCHITECTURE_SUMMARY.md](./architecture/ARCHITECTURE_SUMMARY.md)** - Краткая сводка архитектуры
 - **[DATA_FLOWS.md](./architecture/DATA_FLOWS.md)** - Потоки данных и взаимодействие компонентов
+- **[DATA_FLOWS_TECHNICAL_GUIDE.md](./architecture/DATA_FLOWS_TECHNICAL_GUIDE.md)** - Техническое руководство
 - **[API_INTERFACES.md](./architecture/API_INTERFACES.md)** - Описание интерфейсов и контрактов
 - **[SECURITY_DESIGN.md](./architecture/SECURITY_DESIGN.md)** - Архитектура безопасности
+- **[COMPREHENSIVE_ARCHITECTURE_AUDIT.md](./architecture/COMPREHENSIVE_ARCHITECTURE_AUDIT.md)** - Полный аудит архитектуры
 
 ### 📘 `/guides` - Руководства пользователя
 - **[METHODS_OVERVIEW.md](./guides/METHODS_OVERVIEW.md)** - Сравнение методов обработки
 - **[VOICEPRINT_GUIDE.md](./guides/VOICEPRINT_GUIDE.md)** - Работа с голосовыми отпечатками
 - **[USAGE_EXAMPLES.md](./guides/USAGE_EXAMPLES.md)** - Примеры для различных сценариев
 - **[TROUBLESHOOTING.md](./guides/TROUBLESHOOTING.md)** - Решение типичных проблем
+- **[WEBHOOK_GUIDE.md](./guides/WEBHOOK_GUIDE.md)** - Настройка и использование webhook
+- **[WER_TESTING_GUIDE.md](./guides/WER_TESTING_GUIDE.md)** - Тестирование точности транскрипции
+- **[MEETING_PROCESSING_PLAN.md](./guides/MEETING_PROCESSING_PLAN.md)** - Обработка записей встреч
+- **[QUICK_START_SCHONGILAND.md](./guides/QUICK_START_SCHONGILAND.md)** - Быстрый старт для Schöngiland
 
 ### 🔧 `/api` - API документация
 - **[PYANNOTE_SETUP.md](./api/PYANNOTE_SETUP.md)** - Настройка pyannote.ai
@@ -40,24 +47,31 @@
 - **[DEPLOYMENT_CHECKLIST.md](./deployment/DEPLOYMENT_CHECKLIST.md)** - Чеклист для production
 - **[DOCKER_SETUP.md](./deployment/DOCKER_SETUP.md)** - Контейнеризация
 - **[MONITORING_SETUP.md](./deployment/MONITORING_SETUP.md)** - Настройка мониторинга
-- **[SCALING_GUIDE.md](./deployment/SCALING_GUIDE.md)** - Масштабирование
 
-### 💻 `/development` - Для разработчиков
+### 💻 `/development` - Для разработчиков  
 - **[DEVELOPMENT_SETUP.md](./development/DEVELOPMENT_SETUP.md)** - Настройка окружения
-- **[TESTING_GUIDE.md](./development/TESTING_GUIDE.md)** - Тестирование
-- **[CONTRIBUTING.md](./development/CONTRIBUTING.md)** - Руководство контрибьютора
-- **[CODE_STANDARDS.md](./development/CODE_STANDARDS.md)** - Стандарты кода
+- **[PARALLEL_PROCESSING.md](./development/PARALLEL_PROCESSING.md)** - Параллельная обработка
 
 ### 📊 `/benchmarks` - Тесты производительности
-- **[PERFORMANCE_TESTS.md](./benchmarks/PERFORMANCE_TESTS.md)** - Результаты тестов
+- **[PERFORMANCE_TESTS.md](./benchmarks/PERFORMANCE_TESTS.md)** - План оптимизации производительности
 - **[LARGE_FILES_TESTS.md](./benchmarks/LARGE_FILES_TESTS.md)** - Обработка больших файлов
 - **[COST_ANALYSIS.md](./benchmarks/COST_ANALYSIS.md)** - Анализ стоимости
 
+### 💼 `/examples` - Примеры кода
+- **[webhook_example.py](./examples/webhook_example.py)** - Пример webhook интеграции
+
 ### 📝 `/releases` - История релизов
 - **[CHANGELOG.md](./releases/CHANGELOG.md)** - История изменений
-- **[v2.0_RELEASE_NOTES.md](./releases/v2.0_RELEASE_NOTES.md)** - Релиз v2.0
+- **[STATUS_SUMMARY.md](./releases/STATUS_SUMMARY.md)** - Текущий статус проекта
 - **[v1.3_RELEASE_NOTES.md](./releases/v1.3_RELEASE_NOTES.md)** - Релиз v1.3
-- **[ROADMAP_2025.md](./releases/ROADMAP_2025.md)** - План развития
+- **[ROADMAP_2025.md](./releases/ROADMAP_2025.md)** - План развития на 2025
+- **[Q3_2025_ROADMAP.md](./releases/Q3_2025_ROADMAP.md)** - Roadmap на Q3 2025
+
+### 📊 `/reports` - Отчеты и анализ
+- **[README.md](./reports/README.md)** - Обзор всех отчетов
+- **[testing/](./reports/testing/)** - Отчеты по тестированию
+- **[features/](./reports/features/)** - Отчеты по функциям
+- **[archive/](./reports/archive/)** - Архивные отчеты
 
 ---
 
@@ -66,7 +80,7 @@
 ### Установка и настройка
 - [Системные требования](../README.md#предварительные-требования)
 - [Получение API ключей](./api/PYANNOTE_SETUP.md#получение-api-ключа)
-- [Переменные окружения](../README.md#настройте-переменные-окружения)
+- [Переменные окружения](./development/DEVELOPMENT_SETUP.md#настройка-api-ключей)
 
 ### Использование
 - [Базовые команды](../README.md#базовые-команды)
@@ -76,8 +90,8 @@
 
 ### Разработка
 - [Архитектура агентов](./architecture/ARCHITECTURE_OVERVIEW.md#агенты)
-- [Написание тестов](./development/TESTING_GUIDE.md#написание-тестов)
-- [Добавление нового агента](./development/CONTRIBUTING.md#добавление-агента)
+- [Настройка окружения](./development/DEVELOPMENT_SETUP.md)
+- [Параллельная обработка](./development/PARALLEL_PROCESSING.md)
 
 ### Проблемы и решения
 - [Ошибки API](./guides/TROUBLESHOOTING.md#ошибки-api)
@@ -108,4 +122,4 @@
 
 ---
 
-*Последнее обновление: Июнь 2025*
+*Последнее обновление: Июнь 2025 | Структура документации реорганизована*
