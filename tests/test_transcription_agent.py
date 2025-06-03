@@ -6,12 +6,12 @@ import openai
 
 def test_init():
     # Используем существующую модель
-    agent = TranscriptionAgent(api_key="test_key", model="gpt-4o-transcribe")
+    agent = TranscriptionAgent(api_key="test-key", model="gpt-4o-transcribe")  # Используем test-key для тестового окружения
     assert agent.model == "gpt-4o-transcribe"
     assert agent.client is not None
 
 def test_run():
-    agent = TranscriptionAgent(api_key="test_key")
+    agent = TranscriptionAgent(api_key="test-key")  # Используем test-key для тестового окружения
 
     # Создаём мок-объект для сегмента
     mock_segment = MagicMock()
@@ -32,8 +32,12 @@ def test_run():
     mock_transcript.segments = [mock_segment]
     mock_transcript.duration = 1.0  # Добавляем duration как число
 
-    with patch.object(agent.client.audio.transcriptions, 'create') as mock_create:
-        mock_create.return_value = mock_transcript
+    # Мокируем client.with_options для правильной работы с timeout
+    with patch.object(agent, 'client') as mock_client:
+        # Создаем mock для with_options
+        mock_client_with_timeout = MagicMock()
+        mock_client.with_options.return_value = mock_client_with_timeout
+        mock_client_with_timeout.audio.transcriptions.create.return_value = mock_transcript
 
         with patch('builtins.open', MagicMock()), \
              patch.object(Path, 'stat') as mock_stat, \
@@ -48,9 +52,9 @@ def test_run():
             assert result[0]["start"] == 0
             assert result[0]["end"] == 1
 
-            mock_create.assert_called_once()
+            mock_client_with_timeout.audio.transcriptions.create.assert_called_once()
             # Проверяем, что параметры переданы корректно
-            call_kwargs = mock_create.call_args.kwargs
+            call_kwargs = mock_client_with_timeout.audio.transcriptions.create.call_args.kwargs
             assert call_kwargs["model"] == "whisper-1"  # модель по умолчанию
             assert call_kwargs["prompt"] == "Test prompt"
             assert call_kwargs["temperature"] == 0

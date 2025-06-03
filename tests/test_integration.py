@@ -92,24 +92,30 @@ class TestFullPipeline:
         """Тест сбора метрик производительности"""
         import time
 
-        trans_agent = TranscriptionAgent("fake_key")
+        trans_agent = TranscriptionAgent("test-key")  # Используем test-key для тестового окружения
+
+        # Мокируем client.with_options для правильной работы с timeout
         with patch.object(trans_agent, 'client') as mock_client:
+            # Создаем mock для with_options
+            mock_client_with_timeout = MagicMock()
+            mock_client.with_options.return_value = mock_client_with_timeout
+
             # Мокируем ответ OpenAI
             mock_transcript = MagicMock()
             mock_transcript.segments = [
                 MagicMock(model_dump=lambda: {"start": 0, "end": 1, "text": "test"})
             ]
             mock_transcript.duration = 1.0
-            mock_client.audio.transcriptions.create.return_value = mock_transcript
-            
+            mock_client_with_timeout.audio.transcriptions.create.return_value = mock_transcript
+
             start_time = time.time()
             result = trans_agent.run(mock_audio_file)
             end_time = time.time()
-            
+
             # Проверяем, что результат получен
             assert len(result) == 1
             assert result[0]["text"] == "test"
-            
+
             # Проверяем, что время выполнения разумное
             execution_time = end_time - start_time
             assert execution_time < 5.0  # Не должно занимать больше 5 секунд

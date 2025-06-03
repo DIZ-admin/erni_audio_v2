@@ -201,37 +201,56 @@ class TestPerformanceMetrics:
         """Тест логирования времени обработки"""
         # Этот тест проверяет, что метрики времени корректно рассчитываются
         # без реального API вызова
-        
-        from unittest.mock import Mock, patch
-        
-        with patch('pipeline.transcription_agent.OpenAI') as mock_openai:
-            # Мокаем ответ API
+
+        from unittest.mock import Mock, patch, MagicMock
+
+        agent = TranscriptionAgent("test-key", "whisper-1")  # Используем test-key для тестового окружения
+
+        # Мокируем client.with_options для правильной работы с timeout
+        with patch.object(agent, 'client') as mock_client:
+            # Создаем mock для with_options
+            mock_client_with_timeout = MagicMock()
+            mock_client.with_options.return_value = mock_client_with_timeout
+
+            # Мокаем ответ API - создаем правильную структуру для verbose_json
             mock_transcript = Mock()
-            mock_transcript.segments = []
+            mock_segment = MagicMock()
+            mock_segment.model_dump.return_value = {
+                "id": 0,
+                "start": 0.0,
+                "end": 60.0,
+                "text": "Test transcription",
+                "tokens": [],
+                "avg_logprob": -0.5,
+                "no_speech_prob": 0.1,
+                "temperature": 0.0,
+                "compression_ratio": 1.0
+            }
+            mock_transcript.segments = [mock_segment]  # Список сегментов
             mock_transcript.duration = 60.0  # 60 секунд аудио
-            
-            mock_client = Mock()
-            mock_client.audio.transcriptions.create.return_value = mock_transcript
-            mock_openai.return_value = mock_client
-            
-            agent = TranscriptionAgent("test_key", "whisper-1")
-            
+
+            mock_client_with_timeout.audio.transcriptions.create.return_value = mock_transcript
+
             # Создаем временный файл для теста
             import tempfile
             with tempfile.NamedTemporaryFile(suffix=".wav") as tmp_file:
                 tmp_path = Path(tmp_file.name)
-                
+
                 # Мокаем размер файла
                 with patch.object(Path, 'stat') as mock_stat:
                     mock_stat.return_value.st_size = 1024 * 1024  # 1MB
-                    
+
                     with patch.object(Path, 'exists', return_value=True):
                         segments = agent.run(tmp_path, "")
-            
+
+            # Проверяем, что результат получен
+            assert len(segments) == 1
+            assert segments[0]["text"] == "Test transcription"
+
             # Проверяем, что API был вызван с правильными параметрами
-            mock_client.audio.transcriptions.create.assert_called_once()
-            call_args = mock_client.audio.transcriptions.create.call_args[1]
-            
+            mock_client_with_timeout.audio.transcriptions.create.assert_called_once()
+            call_args = mock_client_with_timeout.audio.transcriptions.create.call_args[1]
+
             assert call_args["model"] == "whisper-1"
             assert call_args["response_format"] == "verbose_json"
             assert call_args["temperature"] == 0

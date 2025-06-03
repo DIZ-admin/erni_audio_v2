@@ -301,7 +301,13 @@ class TestRealAudioPipeline:
 
         try:
             # Создаем агент и мокируем его клиент
-            trans_agent = TranscriptionAgent("fake_api_key")
+            trans_agent = TranscriptionAgent("test-key")  # Используем test-key для тестового окружения
+
+            # Настраиваем мок для with_options
+            mock_client_with_timeout = MagicMock()
+            mock_client.with_options.return_value = mock_client_with_timeout
+            mock_client_with_timeout.audio.transcriptions.create.return_value = mock_response
+
             trans_agent.client = mock_client  # Заменяем клиент на мок
 
             start_time = time.time()
