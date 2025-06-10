@@ -16,6 +16,10 @@ from typing import Dict, Any, Optional, Callable
 import asyncio
 from dataclasses import dataclass
 
+from .base_agent import BaseAgent
+from .validation_mixin import ValidationMixin
+from .retry_mixin import RetryMixin
+from .rate_limit_mixin import RateLimitMixin
 from .utils import save_json
 
 
@@ -36,10 +40,10 @@ class WebhookVerificationError(Exception):
     pass
 
 
-class WebhookAgent:
+class WebhookAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin):
     """
     Агент для обработки веб-хуков pyannote.ai.
-    
+
     Функции:
     - Верификация подписи веб-хука согласно документации pyannote.ai
     - Парсинг и валидация payload
@@ -47,28 +51,37 @@ class WebhookAgent:
     - Уведомления о завершении задач
     - Обработка повторных попыток
     """
-    
+
     def __init__(self, webhook_secret: str, data_dir: Path = None):
         """
         Инициализация WebhookAgent.
-        
+
         Args:
             webhook_secret: Секрет для верификации подписи веб-хука
             data_dir: Директория для сохранения результатов (по умолчанию data/interim)
         """
+        # Инициализация базовых классов
+        BaseAgent.__init__(self, name="WebhookAgent")
+        ValidationMixin.__init__(self)
+        RetryMixin.__init__(self)
+        RateLimitMixin.__init__(self, service_name="webhook")
+
+        # Валидация webhook secret
+        if not webhook_secret or len(webhook_secret) < 10:
+            raise ValueError("webhook_secret должен содержать минимум 10 символов")
+
         self.webhook_secret = webhook_secret
         self.data_dir = data_dir or Path("data/interim")
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        
-        self.logger = logging.getLogger(__name__)
+
         self.event_handlers: Dict[str, Callable] = {}
-        
+
         # Метрики
         self.processed_webhooks = 0
         self.failed_verifications = 0
         self.successful_events = 0
-        
-        self.logger.info("✅ WebhookAgent инициализирован")
+
+        self.log_with_emoji("info", "✅", "WebhookAgent инициализирован")
     
     def verify_signature(self, timestamp: str, body: str, received_signature: str) -> bool:
         """
@@ -175,35 +188,50 @@ class WebhookAgent:
     
     def process_webhook_event(self, event: WebhookEvent) -> bool:
         """
-        Обрабатывает событие веб-хука.
-        
+        Обрабатывает событие веб-хука с rate limiting.
+
         Args:
             event: Событие веб-хука для обработки
-            
+
         Returns:
             True если событие успешно обработано
         """
+        operation_name = f"process_webhook_{event.job_type}"
+        self.start_operation(operation_name)
+
         try:
-            self.logger.info(f"🎯 Обрабатываю {event.job_type} webhook: {event.job_id} (статус: {event.status})")
-            
+            # Применяем rate limiting для webhook обработки
+            self.wait_for_rate_limit("webhook_processing")
+
+            self.log_with_emoji("info", "🎯", f"Обрабатываю {event.job_type} webhook: {event.job_id} (статус: {event.status})")
+
             # Сохраняем результат в файл
             if event.status == "succeeded" and event.output:
                 self._save_webhook_result(event)
                 self.successful_events += 1
             elif event.status == "canceled":
-                self.logger.warning(f"⚠️ Задача {event.job_id} была отменена")
+                self.log_with_emoji("warning", "⚠️", f"Задача {event.job_id} была отменена")
             else:
-                self.logger.error(f"❌ Неизвестный статус задачи: {event.status}")
-            
-            # Вызываем пользовательские обработчики
+                self.log_with_emoji("error", "❌", f"Неизвестный статус задачи: {event.status}")
+
+            # Вызываем пользовательские обработчики с retry логикой
             if event.job_type in self.event_handlers:
-                self.event_handlers[event.job_type](event)
-            
+                def handler_operation():
+                    return self.event_handlers[event.job_type](event)
+
+                self.retry_operation(
+                    operation=handler_operation,
+                    operation_name=f"webhook_handler_{event.job_type}",
+                    max_retries=3
+                )
+
             self.processed_webhooks += 1
+            self.end_operation(operation_name)
             return True
-            
+
         except Exception as e:
-            self.logger.error(f"❌ Ошибка обработки webhook события: {e}")
+            self.handle_error(e, f"Ошибка обработки webhook события {event.job_id}")
+            self.end_operation(operation_name)
             return False
     
     def _save_webhook_result(self, event: WebhookEvent) -> Path:

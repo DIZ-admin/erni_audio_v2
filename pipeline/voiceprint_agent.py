@@ -10,9 +10,11 @@ import requests
 from .pyannote_media_agent import PyannoteMediaAgent
 from .base_agent import BaseAgent
 from .validation_mixin import ValidationMixin
+from .retry_mixin import RetryMixin
+from .rate_limit_mixin import RateLimitMixin
 
 
-class VoiceprintAgent(BaseAgent, ValidationMixin):
+class VoiceprintAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin):
     """
     Агент для создания голосовых отпечатков через pyannote.ai Voiceprint API.
 
@@ -31,6 +33,8 @@ class VoiceprintAgent(BaseAgent, ValidationMixin):
         # Инициализация базовых классов
         BaseAgent.__init__(self, name="VoiceprintAgent")
         ValidationMixin.__init__(self)
+        RetryMixin.__init__(self)
+        RateLimitMixin.__init__(self, service_name="pyannote")
 
         # Валидация API ключа
         self.validate_api_key(api_key)
@@ -211,14 +215,14 @@ class VoiceprintAgent(BaseAgent, ValidationMixin):
     # Метод _validate_audio_file удален - используется validate_voiceprint_audio_file
     
     def _submit_voiceprint_job(self, media_url: str) -> str:
-        """Отправляет задачу на создание voiceprint."""
+        """Отправляет задачу на создание voiceprint с rate limiting."""
         url = f"{self.base_url}/voiceprint"
-        
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        
+
         data = {
             "url": media_url
         }
@@ -226,73 +230,72 @@ class VoiceprintAgent(BaseAgent, ValidationMixin):
         if self.webhook_url:
             data["webhook"] = self.webhook_url
             self.log_with_emoji("info", "🔗", f"Webhook URL добавлен для voiceprint: {self.webhook_url}")
-        
-        response = requests.post(url, json=data, headers=headers, timeout=30)
-        
-        if response.status_code != 200:
-            error_msg = f"HTTP {response.status_code}"
-            try:
-                error_detail = response.json().get("detail", "Unknown error")
-                error_msg += f": {error_detail}"
-            except:
-                error_msg += f": {response.text}"
-            raise RuntimeError(f"Ошибка pyannote.ai API: {error_msg}")
-        
-        result = response.json()
+
+        def _submit_request():
+            response = requests.post(url, json=data, headers=headers, timeout=30)
+
+            if response.status_code != 200:
+                error_msg = f"HTTP {response.status_code}"
+                try:
+                    error_detail = response.json().get("detail", "Unknown error")
+                    error_msg += f": {error_detail}"
+                except:
+                    error_msg += f": {response.text}"
+                raise RuntimeError(f"Ошибка pyannote.ai API: {error_msg}")
+
+            return response.json()
+
+        # Выполняем запрос с rate limiting
+        result = self.with_rate_limit(_submit_request, "voiceprint")
         return result["jobId"]
     
     def _wait_for_completion(self, job_id: str, max_wait_seconds: int = 300) -> str:
-        """Ждет завершения voiceprint job и возвращает base64 voiceprint."""
+        """Ждет завершения voiceprint job и возвращает base64 voiceprint с retry логикой."""
         url = f"{self.base_url}/jobs/{job_id}"
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        
-        start_time = time.time()
-        retry_count = 0
-        
-        while time.time() - start_time < max_wait_seconds:
-            try:
-                response = requests.get(url, headers=headers, timeout=30)
-                
-                if response.status_code != 200:
-                    raise RuntimeError(f"Ошибка получения статуса job: HTTP {response.status_code}")
-                
-                job_data = response.json()
-                status = job_data.get("status")
-                
-                if status == "succeeded":
-                    voiceprint = job_data.get("output", {}).get("voiceprint")
-                    if not voiceprint:
-                        raise RuntimeError("Voiceprint не найден в ответе API")
-                    return voiceprint
-                
-                elif status == "failed":
-                    error_msg = job_data.get("output", {}).get("error", "Unknown error")
-                    raise RuntimeError(f"Voiceprint job failed: {error_msg}")
-                
-                elif status == "canceled":
-                    raise RuntimeError("Voiceprint job был отменен")
-                
-                elif status in ["created", "processing", "running"]:
-                    # Продолжаем ждать
-                    retry_count += 1
-                    if retry_count <= 5:
-                        self.log_with_emoji("debug", "⏳", f"Voiceprint job {job_id} в статусе '{status}', ждем...")
-                    elif retry_count % 10 == 0:
-                        elapsed = time.time() - start_time
-                        self.log_with_emoji("info", "⏳", f"Voiceprint job {job_id} обрабатывается уже {elapsed:.1f}с...")
 
-                    time.sleep(2)
-                    continue
-                
-                else:
-                    raise RuntimeError(f"Неизвестный статус voiceprint job: {status}")
-                    
-            except requests.RequestException as e:
-                self.log_with_emoji("warning", "⚠️", f"Ошибка сети при проверке voiceprint job: {e}")
-                time.sleep(5)
-                continue
-        
-        raise RuntimeError(f"Превышено время ожидания voiceprint job ({max_wait_seconds}с)")
+        def _check_job_status():
+            response = requests.get(url, headers=headers, timeout=30)
+
+            if response.status_code != 200:
+                raise RuntimeError(f"Ошибка получения статуса job: HTTP {response.status_code}")
+
+            job_data = response.json()
+            status = job_data.get("status")
+
+            if status == "succeeded":
+                voiceprint = job_data.get("output", {}).get("voiceprint")
+                if not voiceprint:
+                    raise RuntimeError("Voiceprint не найден в ответе API")
+                return voiceprint
+
+            elif status == "failed":
+                error_msg = job_data.get("output", {}).get("error", "Unknown error")
+                raise RuntimeError(f"Voiceprint job failed: {error_msg}")
+
+            elif status == "canceled":
+                raise RuntimeError("Voiceprint job был отменен")
+
+            elif status in ["created", "processing", "running"]:
+                # Продолжаем ждать
+                raise RuntimeError("not-ready")
+
+            else:
+                raise RuntimeError(f"Неизвестный статус voiceprint job: {status}")
+
+        # Используем retry с rate limiting
+        try:
+            return self.retry_with_backoff(
+                lambda: self.with_rate_limit(_check_job_status, "poll"),
+                max_attempts=max_wait_seconds // 2,  # Проверяем каждые 2 секунды
+                base_delay=2.0,
+                max_delay=10.0,
+                exceptions=(RuntimeError, requests.RequestException)
+            )
+        except Exception as e:
+            if "not-ready" in str(e):
+                raise RuntimeError(f"Превышено время ожидания voiceprint job ({max_wait_seconds}с)")
+            raise
     
     def estimate_cost(self, audio_file: Path) -> Dict[str, any]:
         """

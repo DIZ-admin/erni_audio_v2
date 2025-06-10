@@ -8,6 +8,9 @@ from typing import List, Dict, Any, Optional, Tuple
 from pydub import AudioSegment
 from dataclasses import dataclass
 
+from .base_agent import BaseAgent
+from .validation_mixin import ValidationMixin
+
 TARGET_SR = 16_000
 
 @dataclass
@@ -33,7 +36,7 @@ class ValidationResult:
     warnings: List[str]
     errors: List[str]
 
-class QCAgent:
+class QCAgent(BaseAgent, ValidationMixin):
     """
     Расширенный агент контроля качества для результатов диаризации и транскрипции.
 
@@ -54,11 +57,16 @@ class QCAgent:
             min_segment_duration: Минимальная длительность сегмента (сек)
             max_silence_gap: Максимальный разрыв между сегментами (сек)
         """
+        # Инициализация базовых классов
+        BaseAgent.__init__(self, name="QCAgent")
+        ValidationMixin.__init__(self)
+
         self.manifest_dir = manifest_dir
         self.per_speaker_sec = per_speaker_sec
         self.min_segment_duration = min_segment_duration
         self.max_silence_gap = max_silence_gap
-        self.logger = logging.getLogger(__name__)
+
+        self.log_with_emoji("info", "✅", "QCAgent инициализирован")
 
     def validate_timestamps(self, segments: List[Dict[str, Any]]) -> List[str]:
         """
