@@ -5,19 +5,21 @@ VoiceprintAgent для создания голосовых отпечатков 
 import logging
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import requests
 from .pyannote_media_agent import PyannoteMediaAgent
+from .base_agent import BaseAgent
+from .validation_mixin import ValidationMixin
 
 
-class VoiceprintAgent:
+class VoiceprintAgent(BaseAgent, ValidationMixin):
     """
     Агент для создания голосовых отпечатков через pyannote.ai Voiceprint API.
-    
+
     Создает уникальные голосовые отпечатки из аудиофайлов (≤30 секунд),
     которые затем можно использовать для идентификации спикеров.
     """
-    
+
     def __init__(self, api_key: str, webhook_url: Optional[str] = None):
         """
         Инициализация VoiceprintAgent.
@@ -26,28 +28,122 @@ class VoiceprintAgent:
             api_key: API ключ pyannote.ai
             webhook_url: URL для получения веб-хуков (опционально)
         """
+        # Инициализация базовых классов
+        BaseAgent.__init__(self, name="VoiceprintAgent")
+        ValidationMixin.__init__(self)
+
+        # Валидация API ключа
+        self.validate_api_key(api_key)
+
         self.api_key = api_key
         self.webhook_url = webhook_url
         self.base_url = "https://api.pyannote.ai/v1"
-        self.logger = logging.getLogger(__name__)
 
         # Инициализируем медиа агент для загрузки файлов
         self.media_agent = PyannoteMediaAgent(api_key)
 
-        self.logger.info("✅ VoiceprintAgent инициализирован")
-    
-    def create_voiceprint(self, 
-                         audio_file: Path, 
+        self.log_with_emoji("info", "✅", "VoiceprintAgent инициализирован")
+
+    def validate_api_key(self, api_key: str) -> None:
+        """
+        Валидация API ключа pyannote.ai.
+
+        Args:
+            api_key: API ключ для валидации
+
+        Raises:
+            ValueError: Если API ключ невалиден
+        """
+        if not isinstance(api_key, str):
+            raise ValueError(f"API ключ должен быть строкой, получен {type(api_key)}")
+
+        if not api_key or not api_key.strip():
+            raise ValueError("API ключ не может быть пустым")
+
+        # Проверяем базовый формат (должен быть достаточно длинным)
+        if len(api_key.strip()) < 10:
+            raise ValueError("API ключ слишком короткий")
+
+    def validate_voiceprint_params(self, audio_file: Path, label: str) -> List[str]:
+        """
+        Валидация параметров для создания voiceprint.
+
+        Args:
+            audio_file: Путь к аудиофайлу
+            label: Метка для voiceprint
+
+        Returns:
+            Список найденных проблем
+        """
+        issues = []
+
+        # Валидация файла
+        try:
+            self.validate_audio_file(audio_file)
+        except ValueError as e:
+            issues.append(f"Проблема с аудиофайлом: {e}")
+
+        # Валидация метки
+        if not isinstance(label, str):
+            issues.append(f"Метка должна быть строкой, получена {type(label)}")
+        elif not label or not label.strip():
+            issues.append("Метка не может быть пустой")
+        elif len(label.strip()) > 100:
+            issues.append("Метка слишком длинная (максимум 100 символов)")
+
+        return issues
+
+    def validate_voiceprint_audio_file(self, audio_file: Path, max_duration_check: bool = True) -> List[str]:
+        """
+        Специальная валидация аудиофайла для voiceprint.
+
+        Args:
+            audio_file: Путь к аудиофайлу
+            max_duration_check: Проверять ли максимальную длительность
+
+        Returns:
+            Список найденных проблем
+        """
+        issues = []
+
+        # Базовая валидация файла
+        try:
+            self.validate_audio_file(audio_file)
+        except ValueError as e:
+            issues.append(str(e))
+            return issues  # Если базовая валидация не прошла, дальше не проверяем
+
+        # Проверка размера файла (≤100MB для voiceprint)
+        file_size_mb = audio_file.stat().st_size / (1024 * 1024)
+        if file_size_mb > 100:
+            issues.append(f"Файл слишком большой: {file_size_mb:.1f}MB (максимум 100MB)")
+
+        # Проверка длительности (≤30 секунд для voiceprint)
+        if max_duration_check:
+            try:
+                import librosa
+                duration = librosa.get_duration(path=str(audio_file))
+                if duration > 30:
+                    issues.append(f"Файл слишком длинный: {duration:.1f}с (максимум 30с)")
+            except ImportError:
+                issues.append("Не удалось проверить длительность: требуется librosa")
+            except Exception as e:
+                issues.append(f"Ошибка при проверке длительности: {e}")
+
+        return issues
+
+    def create_voiceprint(self,
+                         audio_file: Path,
                          label: str,
                          max_duration_check: bool = True) -> Dict:
         """
         Создает голосовой отпечаток из аудиофайла.
-        
+
         Args:
             audio_file: Путь к аудиофайлу (должен содержать только 1 спикера, ≤30с)
             label: Человекочитаемое имя для голосового отпечатка
             max_duration_check: Проверять ли длительность файла (по умолчанию True)
-            
+
         Returns:
             Словарь с информацией о голосовом отпечатке:
             {
@@ -58,24 +154,39 @@ class VoiceprintAgent:
                 "duration": float
             }
         """
-        start_time = time.time()
-        
+        self.start_operation("создание voiceprint")
+
         try:
-            # Валидация файла
-            self._validate_audio_file(audio_file, max_duration_check)
-            
+            # Валидация параметров
+            param_issues = self.validate_voiceprint_params(audio_file, label)
+            if param_issues:
+                self.log_with_emoji("warning", "⚠️", f"Проблемы с параметрами: {len(param_issues)}")
+                for issue in param_issues[:3]:  # Показываем первые 3
+                    self.log_with_emoji("warning", "   ", issue)
+
+            # Валидация аудиофайла для voiceprint
+            audio_issues = self.validate_voiceprint_audio_file(audio_file, max_duration_check)
+            if audio_issues:
+                self.log_with_emoji("warning", "⚠️", f"Проблемы с аудиофайлом: {len(audio_issues)}")
+                for issue in audio_issues[:3]:  # Показываем первые 3
+                    self.log_with_emoji("warning", "   ", issue)
+
+                # Если есть критические проблемы, прерываем
+                if any("слишком большой" in issue or "слишком длинный" in issue for issue in audio_issues):
+                    raise ValueError(f"Критические проблемы с файлом: {audio_issues[0]}")
+
             file_size_mb = audio_file.stat().st_size / (1024 * 1024)
-            self.logger.info(f"🎵 Создаю voiceprint для '{label}': {audio_file.name} ({file_size_mb:.1f}MB)")
-            
+            self.log_with_emoji("info", "🎵", f"Создаю voiceprint для '{label}': {audio_file.name} ({file_size_mb:.1f}MB)")
+
             # Загружаем файл в pyannote.ai временное хранилище
-            self.logger.info("📤 Загружаю файл в pyannote.ai...")
+            self.log_with_emoji("info", "📤", "Загружаю файл в pyannote.ai...")
             media_url = self.media_agent.upload_file(audio_file)
-            self.logger.info(f"✅ Файл загружен: {media_url}")
-            
+            self.log_with_emoji("info", "✅", f"Файл загружен: {media_url}")
+
             # Создаем voiceprint job
             job_id = self._submit_voiceprint_job(media_url)
-            self.logger.info(f"🚀 Voiceprint job запущен: {job_id}")
-            
+            self.log_with_emoji("info", "🚀", f"Voiceprint job запущен: {job_id}")
+
             # Ждем завершения
             voiceprint_data = self._wait_for_completion(job_id)
             
@@ -85,41 +196,19 @@ class VoiceprintAgent:
                 "voiceprint": voiceprint_data,
                 "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "source_file": str(audio_file),
-                "duration": time.time() - start_time,
                 "file_size_mb": file_size_mb
             }
-            
-            duration = time.time() - start_time
-            self.logger.info(f"✅ Voiceprint создан для '{label}' за {duration:.2f}с")
-            
+
+            self.log_with_emoji("info", "✅", f"Voiceprint создан для '{label}'")
+            self.end_operation("создание voiceprint", success=True)
+
             return result
-            
+
         except Exception as e:
-            self.logger.error(f"❌ Ошибка создания voiceprint для '{label}': {e}")
-            raise RuntimeError(f"Ошибка создания voiceprint: {e}") from e
+            self.end_operation("создание voiceprint", success=False)
+            self.handle_error(e, f"создание voiceprint для '{label}'", reraise=True)
     
-    def _validate_audio_file(self, audio_file: Path, check_duration: bool = True) -> None:
-        """Валидация аудиофайла для voiceprint."""
-        if not audio_file.exists():
-            raise FileNotFoundError(f"Аудиофайл не найден: {audio_file}")
-        
-        file_size_mb = audio_file.stat().st_size / (1024 * 1024)
-        
-        # Проверяем размер файла (лимит pyannote.ai: 100MB)
-        if file_size_mb > 100:
-            raise ValueError(f"Файл слишком большой: {file_size_mb:.1f}MB (максимум 100MB)")
-        
-        # Предупреждение о длительности (лимит pyannote.ai: 30 секунд)
-        if check_duration:
-            try:
-                # Примерная оценка длительности по размеру файла
-                # Для WAV 16kHz mono: ~1MB ≈ 30 секунд
-                estimated_duration = file_size_mb * 30
-                if estimated_duration > 30:
-                    self.logger.warning(f"⚠️ Файл может быть длиннее 30 секунд (~{estimated_duration:.1f}с)")
-                    self.logger.warning("⚠️ pyannote.ai принимает файлы до 30 секунд для voiceprint")
-            except:
-                pass  # Игнорируем ошибки оценки длительности
+    # Метод _validate_audio_file удален - используется validate_voiceprint_audio_file
     
     def _submit_voiceprint_job(self, media_url: str) -> str:
         """Отправляет задачу на создание voiceprint."""
@@ -136,7 +225,7 @@ class VoiceprintAgent:
 
         if self.webhook_url:
             data["webhook"] = self.webhook_url
-            self.logger.info(f"🔗 Webhook URL добавлен для voiceprint: {self.webhook_url}")
+            self.log_with_emoji("info", "🔗", f"Webhook URL добавлен для voiceprint: {self.webhook_url}")
         
         response = requests.post(url, json=data, headers=headers, timeout=30)
         
@@ -187,10 +276,10 @@ class VoiceprintAgent:
                     # Продолжаем ждать
                     retry_count += 1
                     if retry_count <= 5:
-                        self.logger.debug(f"Voiceprint job {job_id} в статусе '{status}', ждем...")
+                        self.log_with_emoji("debug", "⏳", f"Voiceprint job {job_id} в статусе '{status}', ждем...")
                     elif retry_count % 10 == 0:
                         elapsed = time.time() - start_time
-                        self.logger.info(f"⏳ Voiceprint job {job_id} обрабатывается уже {elapsed:.1f}с...")
+                        self.log_with_emoji("info", "⏳", f"Voiceprint job {job_id} обрабатывается уже {elapsed:.1f}с...")
 
                     time.sleep(2)
                     continue
@@ -199,7 +288,7 @@ class VoiceprintAgent:
                     raise RuntimeError(f"Неизвестный статус voiceprint job: {status}")
                     
             except requests.RequestException as e:
-                self.logger.warning(f"⚠️ Ошибка сети при проверке voiceprint job: {e}")
+                self.log_with_emoji("warning", "⚠️", f"Ошибка сети при проверке voiceprint job: {e}")
                 time.sleep(5)
                 continue
         
@@ -241,28 +330,42 @@ class VoiceprintAgent:
         Raises:
             ValueError: Если webhook_url не настроен
         """
-        if not self.webhook_url:
-            raise ValueError("webhook_url должен быть настроен для асинхронной обработки")
+        self.start_operation("создание voiceprint (async)")
 
         try:
-            # Валидация файла
-            self._validate_audio_file(audio_file, max_duration_check=True)
+            if not self.webhook_url:
+                raise ValueError("webhook_url должен быть настроен для асинхронной обработки")
+
+            # Валидация параметров
+            param_issues = self.validate_voiceprint_params(audio_file, label)
+            if param_issues:
+                self.log_with_emoji("warning", "⚠️", f"Проблемы с параметрами: {len(param_issues)}")
+                for issue in param_issues[:3]:
+                    self.log_with_emoji("warning", "   ", issue)
+
+            # Валидация аудиофайла
+            audio_issues = self.validate_voiceprint_audio_file(audio_file, max_duration_check=True)
+            if audio_issues:
+                self.log_with_emoji("warning", "⚠️", f"Проблемы с аудиофайлом: {len(audio_issues)}")
+                for issue in audio_issues[:3]:
+                    self.log_with_emoji("warning", "   ", issue)
 
             file_size_mb = audio_file.stat().st_size / (1024 * 1024)
-            self.logger.info(f"🚀 Запускаю асинхронное создание voiceprint для '{label}': {audio_file.name} ({file_size_mb:.1f}MB)")
+            self.log_with_emoji("info", "🚀", f"Запускаю асинхронное создание voiceprint для '{label}': {audio_file.name} ({file_size_mb:.1f}MB)")
 
             # Загружаем файл в pyannote.ai временное хранилище
-            self.logger.info("📤 Загружаю файл в pyannote.ai...")
+            self.log_with_emoji("info", "📤", "Загружаю файл в pyannote.ai...")
             media_url = self.media_agent.upload_file(audio_file)
-            self.logger.info(f"✅ Файл загружен: {media_url}")
+            self.log_with_emoji("info", "✅", f"Файл загружен: {media_url}")
 
             # Создаем voiceprint job с webhook
             job_id = self._submit_voiceprint_job(media_url)
-            self.logger.info(f"✅ Асинхронный voiceprint job запущен: {job_id}")
-            self.logger.info(f"📡 Результат будет отправлен на: {self.webhook_url}")
+            self.log_with_emoji("info", "✅", f"Асинхронный voiceprint job запущен: {job_id}")
+            self.log_with_emoji("info", "📡", f"Результат будет отправлен на: {self.webhook_url}")
 
+            self.end_operation("создание voiceprint (async)", success=True)
             return job_id
 
         except Exception as e:
-            self.logger.error(f"❌ Ошибка запуска асинхронного создания voiceprint: {e}")
-            raise
+            self.end_operation("создание voiceprint (async)", success=False)
+            self.handle_error(e, "запуск асинхронного создания voiceprint", reraise=True)

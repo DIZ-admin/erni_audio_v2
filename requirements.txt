@@ -18,5 +18,9 @@ pytest>=7.4.0
 fastapi>=0.104.0
 uvicorn>=0.24.0
 
+# Export format dependencies
+python-docx>=1.1.0  # For DOCX export
+lxml>=4.9.0  # For TTML/XML export
+
 # Optional: For better audio format support
 # ffmpeg-python>=0.2.0  # Uncomment if you need programmatic ffmpeg access

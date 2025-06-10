@@ -25,6 +25,7 @@ from pipeline.merge_agent import MergeAgent
 from pipeline.export_agent import ExportAgent
 from pipeline.utils import load_json, save_json
 from pipeline.security_validator import SECURITY_VALIDATOR
+from pipeline.monitoring import PERFORMANCE_MONITOR, log_performance_metrics
 
 def parse_args():
     p = argparse.ArgumentParser("speech_pipeline: multi-agent version")
@@ -216,6 +217,7 @@ def show_cost_estimates(file_path: str, transcription_model: str) -> None:
     except Exception as e:
         logger.warning(f"Не удалось рассчитать оценку стоимости: {e}")
 
+@log_performance_metrics
 def run_replicate_pipeline(args, logger, replicate_key: str, start_time: float):
     """Запуск упрощенного пайплайна через Replicate"""
     import time
@@ -224,6 +226,9 @@ def run_replicate_pipeline(args, logger, replicate_key: str, start_time: float):
     from pipeline.utils import save_json
 
     try:
+        # Записываем начало обработки
+        PERFORMANCE_MONITOR.start_processing()
+        logger.info("📊 Мониторинг: начало Replicate pipeline")
         # 1) Валидация входного файла для Replicate
         if args.input.startswith(('http://', 'https://')):
             logger.error("❌ Replicate не поддерживает URL. Используйте локальный файл.")
@@ -249,6 +254,7 @@ def run_replicate_pipeline(args, logger, replicate_key: str, start_time: float):
 
         # 4) Запуск обработки
         logger.info(f"[1/2] 🎵 Обрабатываю через Replicate: {input_path.name}")
+        PERFORMANCE_MONITOR.record_api_call()
 
         segments = replicate_agent.run(
             audio_file=input_path,
@@ -258,6 +264,7 @@ def run_replicate_pipeline(args, logger, replicate_key: str, start_time: float):
         )
 
         logger.info(f"✅ Replicate обработка завершена: {len(segments)} сегментов")
+        PERFORMANCE_MONITOR.end_processing(success=True)
 
         # 5) Сохранение промежуточного результата
         input_name = input_path.stem
@@ -469,6 +476,10 @@ def main():
             sys_exit("PYANNOTE_KEY не установлен")
         return run_identification_pipeline(args, logger, PYANNOTE_KEY, start_time)
 
+    # Начинаем мониторинг основного pipeline
+    PERFORMANCE_MONITOR.start_processing()
+    logger.info("📊 Мониторинг: начало основного pipeline")
+
     # 2) AudioLoaderAgent → (wav_local, wav_url)
     logger.info(f"[1/5] 🎵 Конвертирую аудио: {args.input}")
     try:
@@ -480,6 +491,7 @@ def main():
         )
         wav_local, wav_url = audio_agent.run(args.input)
         logger.info(f"✅ Аудио готово: {wav_local} → {wav_url}")
+        PERFORMANCE_MONITOR.record_api_call()
 
         # Сохраняем промежуточный WAV файл
         input_name = Path(args.input).stem
@@ -505,6 +517,7 @@ def main():
         diar_agent = DiarizationAgent(api_key=PYANNOTE_KEY,
                                       use_identify=use_identify,
                                       voiceprint_ids=voiceprint_ids)
+        PERFORMANCE_MONITOR.record_api_call()
         raw_diar: List[Dict] = diar_agent.run(wav_url)
         logger.info(f"✅ Диаризация завершена: {len(raw_diar)} сегментов")
 
@@ -556,6 +569,7 @@ def main():
         model_info = trans_agent.get_model_info()
         logger.info(f"🔧 Модель: {model_info['name']} ({model_info['cost_tier']} cost)")
 
+        PERFORMANCE_MONITOR.record_api_call()
         whisper_segments = trans_agent.run(wav_local, args.prompt)
         logger.info(f"✅ Транскрипция завершена: {len(whisper_segments)} сегментов")
 
@@ -605,6 +619,19 @@ def main():
     else:
         logger.info(f"🎉 Готово! Результат сохранён: {created_files[0]}")
 
+    # Завершаем мониторинг
+    PERFORMANCE_MONITOR.end_processing(success=True)
+
+    # Сохраняем метрики производительности
+    PERFORMANCE_MONITOR.save_metrics()
+
+    # Получаем статус здоровья системы
+    health_status = PERFORMANCE_MONITOR.get_health_status()
+    logger.info(f"📊 Статус системы: {health_status['status']}")
+    if health_status['issues']:
+        for issue in health_status['issues']:
+            logger.warning(f"⚠️ {issue}")
+
     # Финальные метрики
     end_time = time.time()
     total_time = end_time - start_time
@@ -612,6 +639,7 @@ def main():
         'total_time_seconds': round(total_time, 2),
         'total_segments': len(merged_segments),
         'output_file': str(out_path),
+        'system_status': health_status['status'],
         'success': True
     })
 

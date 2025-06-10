@@ -3,7 +3,7 @@
 import logging
 from openai import OpenAI
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import openai
 import time
 import subprocess
@@ -14,10 +14,13 @@ import asyncio
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pydub import AudioSegment
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
 from .config import ConfigurationManager
+from .base_agent import BaseAgent
+from .validation_mixin import ValidationMixin
+from .retry_mixin import RetryMixin
+from .rate_limit_mixin import RateLimitMixin
 
-class TranscriptionAgent:
+class TranscriptionAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin):
     """
     Агент для взаимодействия с OpenAI Speech-to-Text моделями.
     Поддерживает whisper-1, gpt-4o-transcribe, gpt-4o-mini-transcribe.
@@ -66,37 +69,20 @@ class TranscriptionAgent:
             language: Код языка (например, 'en', 'ru', 'de') для улучшения точности
             response_format: Формат ответа (auto, json, verbose_json, text, srt, vtt)
         """
+        # Инициализация базовых классов
+        BaseAgent.__init__(self, name="TranscriptionAgent")
+        ValidationMixin.__init__(self)
+        RetryMixin.__init__(self)
+        RateLimitMixin.__init__(self, api_name="openai")
+
         self.client = OpenAI(api_key=api_key)
         self.model = self._validate_model(model)
-        self.language = language
+        self.language = self.validate_language_code(language)  # Используем ValidationMixin
         self.response_format = self._determine_response_format(response_format)
-        self.logger = logging.getLogger(__name__)
-
-        # Загружаем конфигурацию для retry
-        try:
-            # Проверяем, что мы не в тестовом окружении
-            if api_key != "test-key":
-                self.config = ConfigurationManager()
-                self.retry_config = self.config.get_retry_config("transcription")
-            else:
-                # Тестовое окружение - используем значения по умолчанию
-                self.retry_config = {}
-        except Exception as e:
-            self.logger.warning(f"Не удалось загрузить конфигурацию: {e}. Используем значения по умолчанию.")
-            self.retry_config = {}
-
-        # Статистика retry для мониторинга
-        self.retry_stats = {
-            "total_attempts": 0,
-            "rate_limit_retries": 0,
-            "connection_retries": 0,
-            "other_retries": 0,
-            "total_retry_time": 0.0
-        }
 
         # Конфигурация параллельной обработки
-        self.max_concurrent_chunks = self.retry_config.get("max_concurrent_chunks", 3)
-        self.chunk_processing_timeout = self.retry_config.get("chunk_processing_timeout", 1800)  # 30 минут
+        self.max_concurrent_chunks = 3  # Максимум 3 части одновременно
+        self.chunk_timeout = 30 * 60  # 30 минут на часть
 
         # Статистика параллельной обработки
         self.parallel_stats = {
@@ -109,92 +95,21 @@ class TranscriptionAgent:
 
         # Логируем выбранную модель
         model_info = self.SUPPORTED_MODELS[self.model]
-        self.logger.info(f"Инициализирован TranscriptionAgent с моделью: {model_info['name']} ({model_info['description']})")
+        self.log_with_emoji("info", "🎯", f"Модель: {model_info['name']} ({model_info['description']})")
 
-    def _get_adaptive_timeout(self, file_size_mb: float) -> float:
-        """
-        Вычисляет адаптивный таймаут на основе размера файла.
+    # Удален _get_adaptive_timeout - используем RetryMixin.get_adaptive_timeout
 
-        Args:
-            file_size_mb: Размер файла в мегабайтах
-
-        Returns:
-            Таймаут в секундах
-        """
-        # Базовый таймаут 60 секунд + 10 секунд на каждый MB
-        base_timeout = 60
-        size_factor = max(1.0, file_size_mb * 10)
-        adaptive_timeout = min(base_timeout + size_factor, 600)  # Максимум 10 минут
-
-        self.logger.debug(f"Адаптивный таймаут для файла {file_size_mb:.1f}MB: {adaptive_timeout:.1f}с")
-        return adaptive_timeout
-
-    def _intelligent_wait_strategy(self, retry_state):
-        """
-        Интеллектуальная стратегия ожидания с различной логикой для разных типов ошибок.
-        """
-        exception = retry_state.outcome.exception()
-        attempt = retry_state.attempt_number
-
-        if isinstance(exception, openai.RateLimitError):
-            # Для rate limit - экспоненциальный backoff с jitter
-            base_delay = 2.0
-            max_delay = 120.0  # 2 минуты максимум
-
-            # Экспоненциальный backoff с jitter
-            delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
-            jitter = random.uniform(0.1, 0.3) * delay
-            final_delay = delay + jitter
-
-            self.logger.warning(
-                f"🔄 Rate limit hit (попытка {attempt}), ждем {final_delay:.1f}с "
-                f"(base: {delay:.1f}с, jitter: {jitter:.1f}с)"
-            )
-
-        elif isinstance(exception, openai.APIConnectionError):
-            # Для сетевых ошибок - быстрые повторы
-            base_delay = 0.5
-            final_delay = min(base_delay * attempt, 10.0)  # Максимум 10 секунд
-
-            self.logger.warning(
-                f"🌐 Сетевая ошибка (попытка {attempt}), быстрый повтор через {final_delay:.1f}с"
-            )
-
-        else:
-            # Для других ошибок - стандартный backoff
-            base_delay = 1.0
-            final_delay = min(base_delay * (1.5 ** (attempt - 1)), 60.0)
-
-            self.logger.warning(
-                f"⚠️ Другая ошибка (попытка {attempt}), повтор через {final_delay:.1f}с: {type(exception).__name__}"
-            )
-
-        # Обновляем общее время retry
-        self.retry_stats["total_retry_time"] += final_delay
-
-        return final_delay
-
-    def _log_retry_statistics(self):
-        """Логирует статистику retry для мониторинга производительности."""
-        if self.retry_stats["total_attempts"] > 0:
-            self.logger.info(
-                f"📊 Статистика retry: всего попыток={self.retry_stats['total_attempts']}, "
-                f"rate_limit={self.retry_stats['rate_limit_retries']}, "
-                f"connection={self.retry_stats['connection_retries']}, "
-                f"other={self.retry_stats['other_retries']}, "
-                f"общее время retry={self.retry_stats['total_retry_time']:.1f}с"
-            )
+    # Удалены _intelligent_wait_strategy и _log_retry_statistics - используем RetryMixin
 
     def _log_parallel_statistics(self):
         """Логирует статистику параллельной обработки для мониторинга производительности."""
         if self.parallel_stats["total_chunks_processed"] > 0:
-            self.logger.info(
-                f"🔄 Статистика параллельной обработки: "
-                f"обработано частей={self.parallel_stats['total_chunks_processed']}, "
+            self.log_with_emoji("info", "📊",
+                f"Параллельная обработка: "
+                f"частей={self.parallel_stats['total_chunks_processed']}, "
                 f"пик одновременных={self.parallel_stats['concurrent_chunks_peak']}, "
-                f"время обработки={self.parallel_stats['total_parallel_time']:.1f}с, "
-                f"неудачных={self.parallel_stats['chunks_failed']}, "
-                f"повторных={self.parallel_stats['chunks_retried']}"
+                f"время={self.parallel_stats['total_parallel_time']:.1f}с, "
+                f"неудачных={self.parallel_stats['chunks_failed']}"
             )
 
     # Поддерживаемые форматы ответа
@@ -253,46 +168,32 @@ class TranscriptionAgent:
         """
         start_time = time.time()
 
+        self.start_operation("транскрипция")
+
         try:
-            # Валидация файла
-            self._validate_audio_file(wav_local)
+            # Валидация файла через ValidationMixin
+            max_size = self.SUPPORTED_MODELS[self.model]["max_file_size_mb"]
+            self.validate_audio_file(wav_local, max_size_mb=max_size)
 
             file_size_mb = wav_local.stat().st_size / (1024 * 1024)  # MB
-            max_size = self.SUPPORTED_MODELS[self.model]["max_file_size_mb"]
             model_info = self.SUPPORTED_MODELS[self.model]
 
-            self.logger.info(f"Начинаю транскрипцию с {model_info['name']}: {wav_local} ({file_size_mb:.1f}MB)")
+            self.log_with_emoji("info", "🎵", f"Начинаю транскрипцию с {model_info['name']}: {wav_local.name} ({file_size_mb:.1f}MB)")
 
             # Проверяем, нужно ли разбивать файл
             if file_size_mb > max_size:
-                return self._transcribe_large_file(wav_local, prompt)
+                result = self._transcribe_large_file(wav_local, prompt)
             else:
-                return self._transcribe_single_file(wav_local, prompt)
+                result = self._transcribe_single_file(wav_local, prompt)
 
-        except openai.APIConnectionError as e:
-            self.logger.error(f"Ошибка подключения к OpenAI API: {e}")
-            raise RuntimeError(f"Не удалось подключиться к OpenAI API: {e}") from e
-        except openai.RateLimitError as e:
-            self.logger.error(f"Превышен лимит запросов OpenAI API: {e}")
-            raise RuntimeError(f"Превышен лимит запросов OpenAI API: {e}") from e
-        except openai.APIStatusError as e:
-            self.logger.error(f"Ошибка OpenAI API (статус {e.status_code}): {e}")
-            raise RuntimeError(f"Ошибка OpenAI API: {e}") from e
+            self.end_operation("транскрипция", success=True)
+            return result
+
         except Exception as e:
-            self.logger.error(f"Неожиданная ошибка при транскрипции: {e}")
-            raise RuntimeError(f"Ошибка транскрипции: {e}") from e
+            self.end_operation("транскрипция", success=False)
+            self.handle_error(e, "транскрипция", reraise=True)
 
-    def _validate_audio_file(self, wav_local: Path) -> None:
-        """Валидация аудиофайла перед транскрипцией."""
-        if not wav_local.exists():
-            raise FileNotFoundError(f"Аудиофайл не найден: {wav_local}")
-
-        # Проверка размера файла - теперь не блокируем, а предупреждаем
-        file_size_mb = wav_local.stat().st_size / (1024 * 1024)
-        max_size = self.SUPPORTED_MODELS[self.model]["max_file_size_mb"]
-
-        if file_size_mb > max_size:
-            self.logger.warning(f"Файл ({file_size_mb:.1f}MB) превышает лимит OpenAI ({max_size}MB). Будет разбит на части.")
+    # Удален _validate_audio_file - используем ValidationMixin.validate_audio_file
 
     def _split_audio_file(self, wav_local: Path, chunk_duration_minutes: int = 10) -> List[Path]:
         """
@@ -306,7 +207,7 @@ class TranscriptionAgent:
             Список путей к частям файла
         """
         try:
-            self.logger.info(f"Разбиваю файл {wav_local.name} на части по {chunk_duration_minutes} минут...")
+            self.log_with_emoji("info", "✂️", f"Разбиваю файл {wav_local.name} на части по {chunk_duration_minutes} минут...")
 
             # Загружаем аудио
             audio = AudioSegment.from_wav(wav_local)
@@ -326,51 +227,43 @@ class TranscriptionAgent:
                 chunks.append(chunk_path)
 
                 chunk_size_mb = chunk_path.stat().st_size / (1024 * 1024)
-                self.logger.debug(f"Создана часть {i+1}: {chunk_path.name} ({chunk_size_mb:.1f}MB)")
+                self.log_with_emoji("debug", "📄", f"Создана часть {i+1}: {chunk_path.name} ({chunk_size_mb:.1f}MB)")
 
-            self.logger.info(f"Файл разбит на {len(chunks)} частей")
+            self.log_with_emoji("info", "✅", f"Файл разбит на {len(chunks)} частей")
             return chunks
 
         except Exception as e:
-            self.logger.error(f"Ошибка разбиения файла: {e}")
-            raise RuntimeError(f"Не удалось разбить файл: {e}") from e
+            self.handle_error(e, "разбиение файла", reraise=True)
 
     def _transcribe_single_file(self, wav_local: Path, prompt: str = "") -> List[Dict]:
         """Транскрибирует один файл с улучшенной retry логикой."""
-        start_time = time.time()
         file_size_mb = wav_local.stat().st_size / (1024 * 1024)
 
-        # Получаем адаптивный таймаут
-        adaptive_timeout = self._get_adaptive_timeout(file_size_mb)
+        # Получаем адаптивный таймаут через RetryMixin
+        adaptive_timeout = self.get_adaptive_timeout(file_size_mb)
 
         # Подготовка параметров запроса
         transcription_params = self._prepare_transcription_params(prompt)
 
-        # Вызываем метод с retry логикой
-        result = self._transcribe_with_intelligent_retry(wav_local, transcription_params, adaptive_timeout)
+        # Создаем функцию для retry
+        def transcribe_func():
+            return self._transcribe_with_rate_limit(wav_local, transcription_params, adaptive_timeout)
 
-        # Логируем статистику
-        duration = time.time() - start_time
-        self.logger.info(f"✅ Транскрипция завершена за {duration:.2f}с (файл: {file_size_mb:.1f}MB)")
-        self._log_retry_statistics()
+        # Выполняем с retry логикой через RetryMixin
+        result = self.retry_with_backoff(
+            transcribe_func,
+            max_attempts=8,
+            base_delay=1.0,
+            max_delay=120.0
+        )
 
+        self.log_with_emoji("info", "✅", f"Транскрипция завершена (файл: {file_size_mb:.1f}MB)")
         return result
 
-    @retry(
-        stop=stop_after_attempt(8),  # Увеличено с 3 до 8 попыток
-        wait=wait_exponential(multiplier=1, min=1, max=120),  # Экспоненциальный backoff 1-120с
-        retry=retry_if_exception_type((
-            openai.RateLimitError,
-            openai.APIConnectionError,
-            openai.APITimeoutError,
-            openai.InternalServerError
-        )),
-        before_sleep=before_sleep_log(logging.getLogger(__name__), logging.WARNING),
-        reraise=True
-    )
-    def _transcribe_with_intelligent_retry(self, wav_local: Path, transcription_params: Dict, timeout: float) -> List[Dict]:
-        """Выполняет транскрипцию с интеллектуальной retry логикой."""
-        try:
+    def _transcribe_with_rate_limit(self, wav_local: Path, transcription_params: Dict, timeout: float) -> List[Dict]:
+        """Выполняет транскрипцию с rate limiting и обработкой ошибок."""
+
+        def api_call():
             # Устанавливаем адаптивный таймаут для клиента
             client_with_timeout = self.client.with_options(timeout=timeout)
 
@@ -384,20 +277,10 @@ class TranscriptionAgent:
             # Обработка результата
             return self._process_transcript_response(transcript)
 
-        except (openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError, openai.InternalServerError) as e:
-            # Логируем ошибку для статистики (стратегия retry обрабатывается tenacity)
-            if isinstance(e, openai.RateLimitError):
-                self.retry_stats["rate_limit_retries"] += 1
-            elif isinstance(e, openai.APIConnectionError):
-                self.retry_stats["connection_retries"] += 1
-            else:
-                self.retry_stats["other_retries"] += 1
-
-            self.retry_stats["total_attempts"] += 1
-            raise  # Перебрасываем исключение для tenacity
-
+        # Выполняем API вызов с rate limiting
+        try:
+            return self.with_rate_limit(api_call, operation_key="transcription", timeout=timeout)
         except openai.APIStatusError as e:
-            self.logger.error(f"Ошибка OpenAI API (статус {e.status_code}): {e}")
             if e.status_code == 429:  # Rate limit
                 raise openai.RateLimitError(f"Rate limit: {e}") from e
             else:
@@ -431,7 +314,7 @@ class TranscriptionAgent:
         start_time = time.time()
 
         try:
-            self.logger.info(f"🔄 Начинаю обработку части {chunk_index + 1}: {chunk_path.name}")
+            self.log_with_emoji("info", "🔄", f"Начинаю обработку части {chunk_index + 1}: {chunk_path.name}")
 
             # Транскрибируем часть
             chunk_segments = self._transcribe_single_file(chunk_path, prompt)
@@ -444,7 +327,7 @@ class TranscriptionAgent:
 
             processing_time = time.time() - start_time
 
-            self.logger.info(f"✅ Часть {chunk_index + 1} обработана: {len(chunk_segments)} сегментов за {processing_time:.2f}с")
+            self.log_with_emoji("info", "✅", f"Часть {chunk_index + 1} обработана: {len(chunk_segments)} сегментов за {processing_time:.2f}с")
 
             return {
                 "index": chunk_index,
@@ -459,7 +342,7 @@ class TranscriptionAgent:
             processing_time = time.time() - start_time
             error_msg = f"Ошибка обработки части {chunk_index + 1}: {e}"
 
-            self.logger.error(error_msg)
+            self.log_with_emoji("error", "❌", error_msg)
             self.parallel_stats["chunks_failed"] += 1
 
             return {
@@ -473,7 +356,7 @@ class TranscriptionAgent:
 
     def _transcribe_large_file(self, wav_local: Path, prompt: str = "") -> List[Dict]:
         """Транскрибирует большой файл с параллельной обработкой частей."""
-        self.logger.info(f"🚀 Обрабатываю большой файл с параллельной обработкой (макс {self.max_concurrent_chunks} одновременно)...")
+        self.log_with_emoji("info", "🚀", f"Обрабатываю большой файл с параллельной обработкой (макс {self.max_concurrent_chunks} одновременно)...")
 
         start_time = time.time()
 
@@ -513,7 +396,7 @@ class TranscriptionAgent:
                 total_processing_time += result["processing_time"]
                 self.parallel_stats["total_chunks_processed"] += 1
             else:
-                self.logger.error(f"❌ Часть {result['index'] + 1} не обработана: {result['error']}")
+                self.log_with_emoji("error", "❌", f"Часть {result['index'] + 1} не обработана: {result['error']}")
 
         # Удаляем временные файлы
         self._cleanup_chunk_files(chunks)
@@ -525,18 +408,18 @@ class TranscriptionAgent:
         # Логируем результаты
         speedup_ratio = total_processing_time / parallel_duration if parallel_duration > 0 else 1.0
 
-        self.logger.info(
-            f"✅ Большой файл обработан: {len(all_segments)} сегментов из {successful_chunks}/{len(chunks)} частей"
+        self.log_with_emoji("info", "✅",
+            f"Большой файл обработан: {len(all_segments)} сегментов из {successful_chunks}/{len(chunks)} частей"
         )
-        self.logger.info(
-            f"⚡ Параллельная обработка: {parallel_duration:.2f}с (ускорение в {speedup_ratio:.1f}x)"
+        self.log_with_emoji("info", "⚡",
+            f"Параллельная обработка: {parallel_duration:.2f}с (ускорение в {speedup_ratio:.1f}x)"
         )
 
         self._log_parallel_statistics()
 
         if successful_chunks < len(chunks):
             failed_count = len(chunks) - successful_chunks
-            self.logger.warning(f"⚠️ {failed_count} частей не удалось обработать")
+            self.log_with_emoji("warning", "⚠️", f"{failed_count} частей не удалось обработать")
 
         return all_segments
 
@@ -553,7 +436,7 @@ class TranscriptionAgent:
         results = []
         active_futures = 0
 
-        self.logger.info(f"🔄 Запускаю параллельную обработку {len(chunk_infos)} частей (макс {self.max_concurrent_chunks} одновременно)")
+        self.log_with_emoji("info", "🔄", f"Запускаю параллельную обработку {len(chunk_infos)} частей (макс {self.max_concurrent_chunks} одновременно)")
 
         with ThreadPoolExecutor(max_workers=self.max_concurrent_chunks) as executor:
             # Отправляем задачи на выполнение
@@ -570,7 +453,7 @@ class TranscriptionAgent:
 
             # Собираем результаты по мере завершения
             try:
-                for future in as_completed(future_to_chunk, timeout=self.chunk_processing_timeout):
+                for future in as_completed(future_to_chunk, timeout=self.chunk_timeout):
                     chunk_info = future_to_chunk[future]
                     active_futures -= 1
 
@@ -579,13 +462,13 @@ class TranscriptionAgent:
                         results.append(result)
 
                         if result["success"]:
-                            self.logger.debug(f"✅ Часть {result['index'] + 1} завершена успешно")
+                            self.log_with_emoji("debug", "✅", f"Часть {result['index'] + 1} завершена успешно")
                         else:
-                            self.logger.warning(f"❌ Часть {result['index'] + 1} завершена с ошибкой")
+                            self.log_with_emoji("warning", "❌", f"Часть {result['index'] + 1} завершена с ошибкой")
 
                     except concurrent.futures.TimeoutError:
                         error_msg = f"Таймаут обработки части {chunk_info['index'] + 1}"
-                        self.logger.error(error_msg)
+                        self.log_with_emoji("error", "⏰", error_msg)
                         self.parallel_stats["chunks_failed"] += 1
 
                         results.append({
@@ -594,12 +477,12 @@ class TranscriptionAgent:
                             "offset": chunk_info["offset"],
                             "success": False,
                             "error": error_msg,
-                            "processing_time": self.chunk_processing_timeout
+                            "processing_time": self.chunk_timeout
                         })
 
                     except Exception as e:
                         error_msg = f"Исключение при обработке части {chunk_info['index'] + 1}: {e}"
-                        self.logger.error(error_msg)
+                        self.log_with_emoji("error", "❌", error_msg)
                         self.parallel_stats["chunks_failed"] += 1
 
                         results.append({
@@ -613,7 +496,7 @@ class TranscriptionAgent:
 
             except concurrent.futures.TimeoutError:
                 # Глобальный таймаут as_completed - обрабатываем незавершенные задачи
-                self.logger.error(f"⏰ Глобальный таймаут параллельной обработки ({self.chunk_processing_timeout}с)")
+                self.log_with_emoji("error", "⏰", f"Глобальный таймаут параллельной обработки ({self.chunk_timeout}с)")
 
                 # Добавляем результаты для незавершенных задач
                 for future, chunk_info in future_to_chunk.items():
@@ -627,10 +510,10 @@ class TranscriptionAgent:
                             "offset": chunk_info["offset"],
                             "success": False,
                             "error": error_msg,
-                            "processing_time": self.chunk_processing_timeout
+                            "processing_time": self.chunk_timeout
                         })
 
-        self.logger.info(f"🏁 Параллельная обработка завершена: {len(results)} результатов")
+        self.log_with_emoji("info", "🏁", f"Параллельная обработка завершена: {len(results)} результатов")
         return results
 
     def _cleanup_chunk_files(self, chunk_paths: List[Path]) -> None:
@@ -639,9 +522,9 @@ class TranscriptionAgent:
             try:
                 if chunk_path.exists():
                     chunk_path.unlink()
-                    self.logger.debug(f"🗑️ Удален временный файл: {chunk_path.name}")
+                    self.log_with_emoji("debug", "🗑️", f"Удален временный файл: {chunk_path.name}")
             except Exception as e:
-                self.logger.warning(f"⚠️ Не удалось удалить временный файл {chunk_path}: {e}")
+                self.log_with_emoji("warning", "⚠️", f"Не удалось удалить временный файл {chunk_path}: {e}")
 
     def _prepare_transcription_params(self, prompt: str) -> Dict:
         """Подготовка параметров для запроса транскрипции."""
@@ -669,7 +552,7 @@ class TranscriptionAgent:
             segments = getattr(transcript, 'segments', [])
 
             if not segments:
-                self.logger.warning(f"Модель {self.model} не вернула сегментов в verbose_json")
+                self.log_with_emoji("warning", "⚠️", f"Модель {self.model} не вернула сегментов в verbose_json")
                 return []
 
             # Конвертируем сегменты в словари
@@ -685,14 +568,14 @@ class TranscriptionAgent:
                 processed_segments.append(segment_dict)
 
             model_info = self.SUPPORTED_MODELS[self.model]
-            self.logger.info(f"{model_info['name']}: обработано {len(processed_segments)} сегментов (verbose_json)")
+            self.log_with_emoji("info", "📊", f"{model_info['name']}: обработано {len(processed_segments)} сегментов (verbose_json)")
             return processed_segments
 
         elif self.response_format == "json":
             # json возвращает только текст
             text = getattr(transcript, 'text', '')
             if not text:
-                self.logger.warning(f"Модель {self.model} не вернула текст в json")
+                self.log_with_emoji("warning", "⚠️", f"Модель {self.model} не вернула текст в json")
                 return []
 
             # Создаем искусственный сегмент
@@ -710,7 +593,7 @@ class TranscriptionAgent:
             }
 
             model_info = self.SUPPORTED_MODELS[self.model]
-            self.logger.info(f"{model_info['name']}: создан сегмент из {len(text)} символов (json)")
+            self.log_with_emoji("info", "📊", f"{model_info['name']}: создан сегмент из {len(text)} символов (json)")
             return [segment]
 
         else:
@@ -718,7 +601,7 @@ class TranscriptionAgent:
             # Эти форматы обычно используются для прямого вывода, а не для обработки
             text_content = str(transcript) if transcript else ""
             if not text_content:
-                self.logger.warning(f"Модель {self.model} не вернула контент в формате {self.response_format}")
+                self.log_with_emoji("warning", "⚠️", f"Модель {self.model} не вернула контент в формате {self.response_format}")
                 return []
 
             segment = {
@@ -734,7 +617,7 @@ class TranscriptionAgent:
             }
 
             model_info = self.SUPPORTED_MODELS[self.model]
-            self.logger.info(f"{model_info['name']}: обработан контент в формате {self.response_format}")
+            self.log_with_emoji("info", "📊", f"{model_info['name']}: обработан контент в формате {self.response_format}")
             return [segment]
 
     def get_model_info(self) -> Dict:
@@ -754,9 +637,9 @@ class TranscriptionAgent:
         """Устанавливает язык для транскрипции."""
         self.language = language
         if language:
-            self.logger.info(f"Установлен язык транскрипции: {language}")
+            self.log_with_emoji("info", "🌐", f"Установлен язык транскрипции: {language}")
         else:
-            self.logger.info("Язык транскрипции сброшен (автоопределение)")
+            self.log_with_emoji("info", "🌐", "Язык транскрипции сброшен (автоопределение)")
 
     def estimate_cost(self, file_size_mb: float) -> str:
         """Оценивает примерную стоимость транскрипции."""

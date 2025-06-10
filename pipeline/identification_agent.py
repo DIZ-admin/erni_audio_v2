@@ -8,16 +8,18 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import requests
 from .pyannote_media_agent import PyannoteMediaAgent
+from .base_agent import BaseAgent
+from .validation_mixin import ValidationMixin
 
 
-class IdentificationAgent:
+class IdentificationAgent(BaseAgent, ValidationMixin):
     """
     Агент для диаризации с идентификацией спикеров через pyannote.ai Identification API.
-    
+
     Выполняет диаризацию аудио и сопоставляет найденных спикеров с предоставленными
     голосовыми отпечатками (voiceprints).
     """
-    
+
     def __init__(self, api_key: str, webhook_url: Optional[str] = None):
         """
         Инициализация IdentificationAgent.
@@ -26,16 +28,154 @@ class IdentificationAgent:
             api_key: API ключ pyannote.ai
             webhook_url: URL для получения веб-хуков (опционально)
         """
+        # Инициализация базовых классов
+        BaseAgent.__init__(self, name="IdentificationAgent")
+        ValidationMixin.__init__(self)
+
+        # Валидация API ключа
+        self.validate_api_key(api_key)
+
         self.api_key = api_key
         self.webhook_url = webhook_url
         self.base_url = "https://api.pyannote.ai/v1"
-        self.logger = logging.getLogger(__name__)
 
         # Инициализируем медиа агент для загрузки файлов
         self.media_agent = PyannoteMediaAgent(api_key)
 
-        self.logger.info("✅ IdentificationAgent инициализирован")
-    
+        self.log_with_emoji("info", "✅", "IdentificationAgent инициализирован")
+
+    def validate_api_key(self, api_key: str) -> None:
+        """
+        Валидация API ключа pyannote.ai.
+
+        Args:
+            api_key: API ключ для валидации
+
+        Raises:
+            ValueError: Если API ключ невалиден
+        """
+        if not isinstance(api_key, str):
+            raise ValueError(f"API ключ должен быть строкой, получен {type(api_key)}")
+
+        if not api_key or not api_key.strip():
+            raise ValueError("API ключ не может быть пустым")
+
+        # Проверяем базовый формат (должен быть достаточно длинным)
+        if len(api_key.strip()) < 10:
+            raise ValueError("API ключ слишком короткий")
+
+    def validate_voiceprints(self, voiceprints: List[Dict]) -> List[str]:
+        """
+        Валидация списка voiceprints для identification.
+
+        Args:
+            voiceprints: Список voiceprints для валидации
+
+        Returns:
+            Список найденных проблем
+        """
+        issues = []
+
+        if not isinstance(voiceprints, list):
+            issues.append("Voiceprints должны быть списком")
+            return issues
+
+        if not voiceprints:
+            issues.append("Список voiceprints не может быть пустым")
+            return issues
+
+        for i, vp in enumerate(voiceprints):
+            if not isinstance(vp, dict):
+                issues.append(f"Voiceprint {i}: должен быть словарем")
+                continue
+
+            # Проверяем обязательные поля
+            if "label" not in vp:
+                issues.append(f"Voiceprint {i}: отсутствует поле 'label'")
+            elif not isinstance(vp["label"], str) or not vp["label"].strip():
+                issues.append(f"Voiceprint {i}: 'label' должно быть непустой строкой")
+
+            if "voiceprint" not in vp:
+                issues.append(f"Voiceprint {i}: отсутствует поле 'voiceprint'")
+            elif not isinstance(vp["voiceprint"], str) or not vp["voiceprint"].strip():
+                issues.append(f"Voiceprint {i}: 'voiceprint' должно быть непустой строкой")
+
+        return issues
+
+    def validate_identification_params(self,
+                                     audio_file: Path,
+                                     voiceprints: List[Dict],
+                                     num_speakers: Optional[int] = None,
+                                     matching_threshold: float = 0.0) -> List[str]:
+        """
+        Валидация параметров для identification.
+
+        Args:
+            audio_file: Путь к аудиофайлу
+            voiceprints: Список voiceprints
+            num_speakers: Количество спикеров
+            matching_threshold: Порог сходства
+
+        Returns:
+            Список найденных проблем
+        """
+        issues = []
+
+        # Валидация файла
+        try:
+            self.validate_audio_file(audio_file)
+        except ValueError as e:
+            issues.append(f"Проблема с аудиофайлом: {e}")
+
+        # Валидация voiceprints
+        vp_issues = self.validate_voiceprints(voiceprints)
+        issues.extend(vp_issues)
+
+        # Валидация num_speakers
+        if num_speakers is not None:
+            if not isinstance(num_speakers, int):
+                issues.append("num_speakers должно быть целым числом")
+            elif num_speakers < 1:
+                issues.append("num_speakers должно быть больше 0")
+            elif num_speakers > 50:
+                issues.append("num_speakers слишком большое (максимум 50)")
+
+        # Валидация matching_threshold
+        if not isinstance(matching_threshold, (int, float)):
+            issues.append("matching_threshold должно быть числом")
+        elif not (0.0 <= matching_threshold <= 1.0):
+            issues.append("matching_threshold должно быть в диапазоне 0.0-1.0")
+
+        return issues
+
+    def validate_identification_audio_file(self, audio_file: Path) -> List[str]:
+        """
+        Специальная валидация аудиофайла для identification.
+
+        Args:
+            audio_file: Путь к аудиофайлу
+
+        Returns:
+            Список найденных проблем
+        """
+        issues = []
+
+        # Базовая валидация файла
+        try:
+            self.validate_audio_file(audio_file)
+        except ValueError as e:
+            issues.append(str(e))
+            return issues  # Если базовая валидация не прошла, дальше не проверяем
+
+        # Проверка размера файла (≤1GB для identification)
+        file_size_mb = audio_file.stat().st_size / (1024 * 1024)
+        if file_size_mb > 1024:
+            issues.append(f"Файл слишком большой: {file_size_mb:.1f}MB (максимум 1GB)")
+        elif file_size_mb > 100:
+            issues.append(f"Большой файл: {file_size_mb:.1f}MB, обработка может занять много времени")
+
+        return issues
+
     def run(self,
             audio_file: Path,
             voiceprints: List[Dict],
@@ -59,60 +199,61 @@ class IdentificationAgent:
             Список сегментов с диаризацией и идентификацией:
             [{"start": float, "end": float, "speaker": str, "confidence": float}, ...]
         """
-        start_time = time.time()
-        
+        self.start_operation("идентификация спикеров")
+
         try:
-            if not voiceprints:
-                raise ValueError("Список voiceprints не может быть пустым")
-            
-            # Валидация файла
-            self._validate_audio_file(audio_file)
-            
+            # Валидация параметров
+            param_issues = self.validate_identification_params(
+                audio_file, voiceprints, num_speakers, matching_threshold
+            )
+            if param_issues:
+                self.log_with_emoji("warning", "⚠️", f"Проблемы с параметрами: {len(param_issues)}")
+                for issue in param_issues[:3]:  # Показываем первые 3
+                    self.log_with_emoji("warning", "   ", issue)
+
+                # Если есть критические проблемы, прерываем
+                if any("не может быть пустым" in issue or "не найден" in issue for issue in param_issues):
+                    raise ValueError(f"Критические проблемы с параметрами: {param_issues[0]}")
+
+            # Валидация аудиофайла для identification
+            audio_issues = self.validate_identification_audio_file(audio_file)
+            if audio_issues:
+                self.log_with_emoji("warning", "⚠️", f"Проблемы с аудиофайлом: {len(audio_issues)}")
+                for issue in audio_issues[:3]:
+                    self.log_with_emoji("warning", "   ", issue)
+
             file_size_mb = audio_file.stat().st_size / (1024 * 1024)
-            self.logger.info(f"🎵 Начинаю идентификацию: {audio_file.name} ({file_size_mb:.1f}MB)")
-            self.logger.info(f"👥 Voiceprints: {len(voiceprints)} ({', '.join([vp['label'] for vp in voiceprints])})")
-            
+            self.log_with_emoji("info", "🎵", f"Начинаю идентификацию: {audio_file.name} ({file_size_mb:.1f}MB)")
+            self.log_with_emoji("info", "👥", f"Voiceprints: {len(voiceprints)} ({', '.join([vp['label'] for vp in voiceprints])})")
+
             # Загружаем файл в pyannote.ai временное хранилище
-            self.logger.info("📤 Загружаю файл в pyannote.ai...")
+            self.log_with_emoji("info", "📤", "Загружаю файл в pyannote.ai...")
             media_url = self.media_agent.upload_file(audio_file)
-            self.logger.info(f"✅ Файл загружен: {media_url}")
-            
+            self.log_with_emoji("info", "✅", f"Файл загружен: {media_url}")
+
             # Создаем identification job
             job_id = self._submit_identification_job(
-                media_url, voiceprints, num_speakers, confidence, 
+                media_url, voiceprints, num_speakers, confidence,
                 matching_threshold, exclusive_matching
             )
-            self.logger.info(f"🚀 Identification job запущен: {job_id}")
-            
+            self.log_with_emoji("info", "🚀", f"Identification job запущен: {job_id}")
+
             # Ждем завершения
             segments = self._wait_for_completion(job_id)
-            
+
             # Логирование результатов
-            duration = time.time() - start_time
             speakers = set(seg["speaker"] for seg in segments)
-            self.logger.info(f"✅ Идентификация завершена: {len(segments)} сегментов за {duration:.2f}с")
-            self.logger.info(f"👥 Обнаружено спикеров: {len(speakers)} ({', '.join(sorted(speakers))})")
-            
+            self.log_with_emoji("info", "✅", f"Идентификация завершена: {len(segments)} сегментов")
+            self.log_with_emoji("info", "👥", f"Обнаружено спикеров: {len(speakers)} ({', '.join(sorted(speakers))})")
+
+            self.end_operation("идентификация спикеров", success=True)
             return segments
-            
+
         except Exception as e:
-            self.logger.error(f"❌ Ошибка идентификации: {e}")
-            raise RuntimeError(f"Ошибка идентификации: {e}") from e
+            self.end_operation("идентификация спикеров", success=False)
+            self.handle_error(e, "идентификация спикеров", reraise=True)
     
-    def _validate_audio_file(self, audio_file: Path) -> None:
-        """Валидация аудиофайла для identification."""
-        if not audio_file.exists():
-            raise FileNotFoundError(f"Аудиофайл не найден: {audio_file}")
-        
-        file_size_mb = audio_file.stat().st_size / (1024 * 1024)
-        
-        # Проверяем размер файла (лимит pyannote.ai: 1GB)
-        if file_size_mb > 1024:
-            raise ValueError(f"Файл слишком большой: {file_size_mb:.1f}MB (максимум 1GB)")
-        
-        # Предупреждение о длительности (лимит pyannote.ai: 24 часа)
-        if file_size_mb > 100:  # Примерно 50 минут для WAV
-            self.logger.warning(f"⚠️ Большой файл: {file_size_mb:.1f}MB, обработка может занять много времени")
+    # Метод _validate_audio_file удален - используется validate_identification_audio_file
     
     def _submit_identification_job(self, 
                                   media_url: str,
@@ -141,17 +282,17 @@ class IdentificationAgent:
         # Добавляем опциональные параметры
         if num_speakers is not None:
             data["numSpeakers"] = num_speakers
-            self.logger.info(f"🎯 Установлено количество спикеров: {num_speakers}")
-        
+            self.log_with_emoji("info", "🎯", f"Установлено количество спикеров: {num_speakers}")
+
         if confidence:
             data["confidence"] = True
-            self.logger.info("📊 Включены confidence scores")
+            self.log_with_emoji("info", "📊", "Включены confidence scores")
 
         if self.webhook_url:
             data["webhook"] = self.webhook_url
-            self.logger.info(f"🔗 Webhook URL добавлен для identification: {self.webhook_url}")
+            self.log_with_emoji("info", "🔗", f"Webhook URL добавлен для identification: {self.webhook_url}")
 
-        self.logger.debug(f"🔍 Отправляемые данные в API: {data}")
+        self.log_with_emoji("debug", "🔍", f"Отправляемые данные в API: {data}")
 
         response = requests.post(url, json=data, headers=headers, timeout=30)
         
@@ -187,29 +328,29 @@ class IdentificationAgent:
                 
                 if status == "succeeded":
                     output = job_data.get("output", {})
-                    self.logger.debug(f"🔍 Полный ответ API: {output}")
+                    self.log_with_emoji("debug", "🔍", f"Полный ответ API: {output}")
 
                     # Для identification API основные данные в поле "identification"
                     identification = output.get("identification", [])
 
                     if identification:
-                        self.logger.info(f"✅ Найдена идентификация: {len(identification)} сегментов")
+                        self.log_with_emoji("info", "✅", f"Найдена идентификация: {len(identification)} сегментов")
                         return self._process_identification_segments(identification)
 
                     # Fallback на обычную диаризацию если identification пуст
                     diarization = output.get("diarization", [])
                     if diarization:
-                        self.logger.warning("⚠️ Identification пуст, используем обычную диаризацию")
+                        self.log_with_emoji("warning", "⚠️", "Identification пуст, используем обычную диаризацию")
                         return self._process_segments(diarization)
 
                     # Fallback на segments
                     segments = output.get("segments", [])
                     if segments:
-                        self.logger.warning("⚠️ Используем segments как fallback")
+                        self.log_with_emoji("warning", "⚠️", "Используем segments как fallback")
                         return self._process_segments(segments)
 
-                    self.logger.warning("⚠️ Identification job завершен, но данные не найдены")
-                    self.logger.debug(f"🔍 Доступные поля в output: {list(output.keys())}")
+                    self.log_with_emoji("warning", "⚠️", "Identification job завершен, но данные не найдены")
+                    self.log_with_emoji("debug", "🔍", f"Доступные поля в output: {list(output.keys())}")
                     return []
                 
                 elif status == "failed":
@@ -223,10 +364,10 @@ class IdentificationAgent:
                     # Продолжаем ждать
                     retry_count += 1
                     if retry_count <= 5:
-                        self.logger.debug(f"Identification job {job_id} в статусе '{status}', ждем...")
+                        self.log_with_emoji("debug", "⏳", f"Identification job {job_id} в статусе '{status}', ждем...")
                     elif retry_count % 10 == 0:
                         elapsed = time.time() - start_time
-                        self.logger.info(f"⏳ Identification job {job_id} обрабатывается уже {elapsed:.1f}с...")
+                        self.log_with_emoji("info", "⏳", f"Identification job {job_id} обрабатывается уже {elapsed:.1f}с...")
 
                     time.sleep(5)
                     continue
@@ -235,7 +376,7 @@ class IdentificationAgent:
                     raise RuntimeError(f"Неизвестный статус identification job: {status}")
                     
             except requests.RequestException as e:
-                self.logger.warning(f"⚠️ Ошибка сети при проверке identification job: {e}")
+                self.log_with_emoji("warning", "⚠️", f"Ошибка сети при проверке identification job: {e}")
                 time.sleep(10)
                 continue
         
@@ -258,7 +399,7 @@ class IdentificationAgent:
 
             processed_segments.append(processed_segment)
 
-        self.logger.info(f"📊 Обработано {len(processed_segments)} identification сегментов")
+        self.log_with_emoji("info", "📊", f"Обработано {len(processed_segments)} identification сегментов")
         return processed_segments
 
     def _process_segments(self, segments: List[Dict]) -> List[Dict]:
@@ -275,7 +416,7 @@ class IdentificationAgent:
 
             processed_segments.append(processed_segment)
 
-        self.logger.info(f"📊 Обработано {len(processed_segments)} сегментов")
+        self.log_with_emoji("info", "📊", f"Обработано {len(processed_segments)} сегментов")
         return processed_segments
     
     def estimate_cost(self, audio_file: Path, num_voiceprints: int) -> Dict[str, any]:
@@ -331,17 +472,28 @@ class IdentificationAgent:
         Raises:
             ValueError: Если webhook_url не настроен
         """
-        if not self.webhook_url:
-            raise ValueError("webhook_url должен быть настроен для асинхронной обработки")
+        self.start_operation("идентификация спикеров (async)")
 
         try:
-            self.logger.info(f"🚀 Запускаю асинхронную идентификацию для: {audio_file}")
-            self.logger.info(f"👥 Voiceprints: {len(voiceprints)}, порог: {matching_threshold}")
+            if not self.webhook_url:
+                raise ValueError("webhook_url должен быть настроен для асинхронной обработки")
+
+            # Валидация параметров
+            param_issues = self.validate_identification_params(
+                audio_file, voiceprints, num_speakers, matching_threshold
+            )
+            if param_issues:
+                self.log_with_emoji("warning", "⚠️", f"Проблемы с параметрами: {len(param_issues)}")
+                for issue in param_issues[:3]:
+                    self.log_with_emoji("warning", "   ", issue)
+
+            self.log_with_emoji("info", "🚀", f"Запускаю асинхронную идентификацию для: {audio_file}")
+            self.log_with_emoji("info", "👥", f"Voiceprints: {len(voiceprints)}, порог: {matching_threshold}")
 
             # Загружаем файл в pyannote.ai временное хранилище
-            self.logger.info("📤 Загружаю файл в pyannote.ai...")
+            self.log_with_emoji("info", "📤", "Загружаю файл в pyannote.ai...")
             media_url = self.media_agent.upload_file(audio_file)
-            self.logger.info(f"✅ Файл загружен: {media_url}")
+            self.log_with_emoji("info", "✅", f"Файл загружен: {media_url}")
 
             # Запускаем identification job с webhook
             job_id = self._submit_identification_job(
@@ -353,11 +505,12 @@ class IdentificationAgent:
                 exclusive_matching=exclusive_matching
             )
 
-            self.logger.info(f"✅ Асинхронная идентификация запущена: {job_id}")
-            self.logger.info(f"📡 Результат будет отправлен на: {self.webhook_url}")
+            self.log_with_emoji("info", "✅", f"Асинхронная идентификация запущена: {job_id}")
+            self.log_with_emoji("info", "📡", f"Результат будет отправлен на: {self.webhook_url}")
 
+            self.end_operation("идентификация спикеров (async)", success=True)
             return job_id
 
         except Exception as e:
-            self.logger.error(f"❌ Ошибка запуска асинхронной идентификации: {e}")
-            raise
+            self.end_operation("идентификация спикеров (async)", success=False)
+            self.handle_error(e, "запуск асинхронной идентификации", reraise=True)
