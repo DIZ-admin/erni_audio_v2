@@ -26,6 +26,7 @@ from pipeline.export_agent import ExportAgent
 from pipeline.utils import load_json, save_json
 from pipeline.security_validator import SECURITY_VALIDATOR
 from pipeline.monitoring import PERFORMANCE_MONITOR, log_performance_metrics
+from pipeline.checkpoint_manager import CheckpointManager, PipelineStage
 
 def parse_args():
     p = argparse.ArgumentParser("speech_pipeline: multi-agent version")
@@ -73,6 +74,18 @@ def parse_args():
 
     # Опции загрузки файлов (только pyannote.ai Media API)
     # Примечание: OneDrive и transfer.sh удалены для повышения безопасности
+
+    # Опции checkpoint системы
+    p.add_argument("--resume", action="store_true",
+                   help="автоматически возобновить с последнего checkpoint'а (по умолчанию)")
+    p.add_argument("--force-restart", action="store_true",
+                   help="игнорировать checkpoint'ы и начать заново")
+    p.add_argument("--cleanup-checkpoints", action="store_true",
+                   help="очистить старые checkpoint'ы (старше 7 дней)")
+    p.add_argument("--list-checkpoints", action="store_true",
+                   help="показать доступные checkpoint'ы для файла")
+    p.add_argument("--delete-checkpoint", metavar="PIPELINE_ID",
+                   help="удалить конкретный checkpoint по ID")
 
     return p.parse_args()
 
@@ -149,6 +162,7 @@ def ensure_directories():
         "data/raw",
         "data/interim",
         "data/processed",
+        "data/checkpoints",
         "voiceprints"
     ]
     for directory in directories:
@@ -216,6 +230,44 @@ def show_cost_estimates(file_path: str, transcription_model: str) -> None:
 
     except Exception as e:
         logger.warning(f"Не удалось рассчитать оценку стоимости: {e}")
+
+def handle_checkpoint_commands(args, logger):
+    """Обработка команд управления checkpoint'ами"""
+    checkpoint_manager = CheckpointManager()
+
+    if args.cleanup_checkpoints:
+        removed_count = checkpoint_manager.cleanup_old_checkpoints(days_old=7)
+        logger.info(f"🧹 Очищено {removed_count} старых checkpoint'ов")
+        return True
+
+    if args.list_checkpoints:
+        if not args.input:
+            logger.error("❌ Для --list-checkpoints необходимо указать входной файл")
+            return True
+
+        summary = checkpoint_manager.get_pipeline_summary(args.input)
+        if summary:
+            logger.info(f"📋 Checkpoint для файла: {args.input}")
+            logger.info(f"   Pipeline ID: {summary['pipeline_id']}")
+            logger.info(f"   Статус: {summary['status']}")
+            logger.info(f"   Создан: {summary['created_at']}")
+            logger.info(f"   Обновлен: {summary['last_updated']}")
+            logger.info(f"   Завершенные этапы: {', '.join(summary['completed_stages'])}")
+            if summary['current_stage']:
+                logger.info(f"   Текущий этап: {summary['current_stage']}")
+            if summary['failed_stage']:
+                logger.info(f"   Неудачный этап: {summary['failed_stage']}")
+            logger.info(f"   Checkpoint'ы: {summary['successful_checkpoints']}/{summary['total_checkpoints']} успешных")
+        else:
+            logger.info(f"📋 Checkpoint'ы для файла {args.input} не найдены")
+        return True
+
+    if args.delete_checkpoint:
+        # Здесь можно добавить логику удаления конкретного checkpoint'а
+        logger.info(f"🗑️ Удаление checkpoint'а {args.delete_checkpoint} (функция в разработке)")
+        return True
+
+    return False
 
 @log_performance_metrics
 def run_replicate_pipeline(args, logger, replicate_key: str, start_time: float):
@@ -405,6 +457,348 @@ def run_identification_pipeline(args, logger, pyannote_key: str, start_time: flo
         logger.error(f"❌ Ошибка Identification Pipeline: {e}")
         sys.exit(1)
 
+@log_performance_metrics
+def run_standard_pipeline_with_checkpoints(args, logger, pyannote_key: str, openai_key: str, start_time: float):
+    """Запуск стандартного пайплайна с поддержкой checkpoint'ов"""
+    import time
+    import shutil
+
+    try:
+        # Инициализация checkpoint manager
+        checkpoint_manager = CheckpointManager()
+        input_name = Path(args.input).stem
+
+        # Проверяем возможность возобновления
+        resume_point, existing_files = checkpoint_manager.get_resume_point(args.input, "standard")
+
+        if resume_point and not args.force_restart:
+            logger.info(f"🔄 Найден checkpoint, возобновление с этапа: {resume_point.value}")
+
+            # Валидируем существующие файлы
+            validation_results = checkpoint_manager.validate_checkpoint_files(args.input)
+            invalid_files = [f for f, valid in validation_results.items() if not valid]
+
+            if invalid_files:
+                logger.warning(f"⚠️ Найдены невалидные файлы: {invalid_files}")
+                logger.info("🔄 Перезапуск с начала из-за поврежденных checkpoint'ов")
+                resume_point = None
+        else:
+            if args.force_restart:
+                logger.info("🆕 Принудительный перезапуск (игнорируем checkpoint'ы)")
+            else:
+                logger.info("🆕 Начинаем новый пайплайн")
+            resume_point = None
+
+        # Начинаем мониторинг
+        PERFORMANCE_MONITOR.start_processing()
+        logger.info("📊 Мониторинг: начало стандартного pipeline с checkpoint'ами")
+
+        # Переменные для хранения результатов этапов
+        wav_local = None
+        wav_url = None
+        raw_diar = None
+        whisper_segments = None
+        merged_segments = None
+
+        # ЭТАП 1: Конвертация аудио
+        if resume_point is None or resume_point == PipelineStage.AUDIO_CONVERSION:
+            logger.info(f"[1/5] 🎵 Конвертирую аудио: {args.input}")
+            try:
+                logger.info("📁 Метод загрузки: pyannote.ai Media API (безопасное временное хранилище)")
+
+                audio_agent = AudioLoaderAgent(
+                    remote_wav_url=args.remote_wav_url,
+                    pyannote_api_key=pyannote_key
+                )
+                wav_local, wav_url = audio_agent.run(args.input)
+                logger.info(f"✅ Аудио готово: {wav_local} → {wav_url}")
+                PERFORMANCE_MONITOR.record_api_call()
+
+                # Сохраняем промежуточный WAV файл
+                interim_wav = Path("data/interim") / f"{input_name}_converted.wav"
+                shutil.copy2(wav_local, interim_wav)
+                logger.debug(f"Промежуточный WAV сохранён: {interim_wav}")
+
+                # Создаем checkpoint
+                checkpoint_manager.create_checkpoint(
+                    input_file=args.input,
+                    stage=PipelineStage.AUDIO_CONVERSION,
+                    output_file=str(interim_wav),
+                    metadata={
+                        "wav_local": str(wav_local),
+                        "wav_url": wav_url,
+                        "file_size_mb": interim_wav.stat().st_size / (1024 * 1024)
+                    },
+                    success=True
+                )
+
+            except Exception as e:
+                checkpoint_manager.create_checkpoint(
+                    input_file=args.input,
+                    stage=PipelineStage.AUDIO_CONVERSION,
+                    output_file="",
+                    success=False,
+                    error_message=str(e)
+                )
+                logger.error(f"❌ Ошибка обработки аудио: {e}")
+                sys.exit(1)
+        else:
+            # Загружаем данные из checkpoint'а
+            logger.info("📂 Загружаю данные аудио из checkpoint'а")
+            state = checkpoint_manager.load_pipeline_state(args.input)
+            if state:
+                for cp in state.checkpoints:
+                    if cp.stage == PipelineStage.AUDIO_CONVERSION.value and cp.success:
+                        wav_local = Path(cp.metadata.get("wav_local", ""))
+                        wav_url = cp.metadata.get("wav_url", "")
+                        logger.info(f"✅ Аудио загружено из checkpoint'а: {wav_local}")
+                        break
+
+        # ЭТАП 2: Диаризация
+        if resume_point is None or resume_point == PipelineStage.DIARIZATION:
+            logger.info("[2/5] 🎤 Запуск диаризации...")
+            use_identify = bool(args.identify)
+            voiceprint_ids = []
+            if use_identify:
+                mapping = load_json(Path(args.identify))  # { "vp_uuid": "Alice", ... }
+                voiceprint_ids = list(mapping.keys())
+                logger.info(f"Режим идентификации: {len(voiceprint_ids)} голосовых отпечатков")
+
+            try:
+                diar_agent = DiarizationAgent(api_key=pyannote_key,
+                                              use_identify=use_identify,
+                                              voiceprint_ids=voiceprint_ids)
+                PERFORMANCE_MONITOR.record_api_call()
+                raw_diar = diar_agent.run(wav_url)
+                logger.info(f"✅ Диаризация завершена: {len(raw_diar)} сегментов")
+
+                # Сохраняем результат диаризации
+                diar_file = Path("data/interim") / f"{input_name}_diarization.json"
+                save_json(raw_diar, diar_file)
+                logger.debug(f"Результат диаризации сохранён: {diar_file}")
+
+                # Создаем checkpoint
+                checkpoint_manager.create_checkpoint(
+                    input_file=args.input,
+                    stage=PipelineStage.DIARIZATION,
+                    output_file=str(diar_file),
+                    metadata={
+                        "segments_count": len(raw_diar),
+                        "use_identify": use_identify,
+                        "voiceprint_ids": voiceprint_ids
+                    },
+                    success=True
+                )
+
+            except Exception as e:
+                checkpoint_manager.create_checkpoint(
+                    input_file=args.input,
+                    stage=PipelineStage.DIARIZATION,
+                    output_file="",
+                    success=False,
+                    error_message=str(e)
+                )
+                logger.error(f"❌ Ошибка диаризации: {e}")
+                sys.exit(1)
+        else:
+            # Загружаем данные из checkpoint'а
+            logger.info("📂 Загружаю данные диаризации из checkpoint'а")
+            state = checkpoint_manager.load_pipeline_state(args.input)
+            if state:
+                for cp in state.checkpoints:
+                    if cp.stage == PipelineStage.DIARIZATION.value and cp.success:
+                        raw_diar = load_json(Path(cp.output_file))
+                        logger.info(f"✅ Диаризация загружена из checkpoint'а: {len(raw_diar)} сегментов")
+                        break
+
+        # ЭТАП 3: Транскрипция
+        if resume_point is None or resume_point == PipelineStage.TRANSCRIPTION:
+            model_name = TranscriptionAgent.SUPPORTED_MODELS.get(args.transcription_model, {}).get('name', args.transcription_model)
+            logger.info(f"[3/5] 📝 Транскрибирую через {model_name}...")
+            try:
+                trans_agent = TranscriptionAgent(
+                    api_key=openai_key,
+                    model=args.transcription_model,
+                    language=args.language
+                )
+
+                # Показываем информацию о модели
+                model_info = trans_agent.get_model_info()
+                logger.info(f"🔧 Модель: {model_info['name']} ({model_info['cost_tier']} cost)")
+
+                PERFORMANCE_MONITOR.record_api_call()
+                whisper_segments = trans_agent.run(wav_local, args.prompt)
+                logger.info(f"✅ Транскрипция завершена: {len(whisper_segments)} сегментов")
+
+                # Сохраняем результат транскрипции
+                whisper_file = Path("data/interim") / f"{input_name}_transcription.json"
+                save_json(whisper_segments, whisper_file)
+                logger.debug(f"Результат транскрипции сохранён: {whisper_file}")
+
+                # Создаем checkpoint
+                checkpoint_manager.create_checkpoint(
+                    input_file=args.input,
+                    stage=PipelineStage.TRANSCRIPTION,
+                    output_file=str(whisper_file),
+                    metadata={
+                        "segments_count": len(whisper_segments),
+                        "model": args.transcription_model,
+                        "language": args.language,
+                        "prompt": args.prompt
+                    },
+                    success=True
+                )
+
+            except Exception as e:
+                checkpoint_manager.create_checkpoint(
+                    input_file=args.input,
+                    stage=PipelineStage.TRANSCRIPTION,
+                    output_file="",
+                    success=False,
+                    error_message=str(e)
+                )
+                logger.error(f"❌ Ошибка транскрипции: {e}")
+                sys.exit(1)
+        else:
+            # Загружаем данные из checkpoint'а
+            logger.info("📂 Загружаю данные транскрипции из checkpoint'а")
+            state = checkpoint_manager.load_pipeline_state(args.input)
+            if state:
+                for cp in state.checkpoints:
+                    if cp.stage == PipelineStage.TRANSCRIPTION.value and cp.success:
+                        whisper_segments = load_json(Path(cp.output_file))
+                        logger.info(f"✅ Транскрипция загружена из checkpoint'а: {len(whisper_segments)} сегментов")
+                        break
+
+        # QC Agent (опционально для извлечения голосовых отпечатков)
+        if args.voiceprints_dir:
+            qc_agent = QCAgent(manifest_dir=Path(args.voiceprints_dir), per_speaker_sec=30)
+            qc_result = qc_agent.run(wav_local, raw_diar)
+            logger.info(f"✅ Голосовые отпечатки сохранены в {args.voiceprints_dir}")
+            return
+
+        # Если было identify, нужно заменить токены на человеческие имена в raw_diar
+        if args.identify:
+            mapping = load_json(Path(args.identify))  # { "vp_uuid": "Alice", … }
+            for seg in raw_diar:
+                seg["speaker"] = mapping.get(seg["speaker"], seg["speaker"])
+            logger.info("✅ Применён маппинг голосовых отпечатков")
+
+        # ЭТАП 4: Объединение
+        if resume_point is None or resume_point == PipelineStage.MERGE:
+            logger.info("[4/5] 🔗 Объединяю диаризацию с транскрипцией...")
+            try:
+                merge_agent = MergeAgent()
+                merged_segments = merge_agent.run(raw_diar, whisper_segments)
+                logger.info(f"✅ Объединение завершено: {len(merged_segments)} финальных сегментов")
+
+                # Сохраняем финальный результат
+                merged_file = Path("data/interim") / f"{input_name}_merged.json"
+                save_json(merged_segments, merged_file)
+                logger.debug(f"Финальный результат сохранён: {merged_file}")
+
+                # Создаем checkpoint
+                checkpoint_manager.create_checkpoint(
+                    input_file=args.input,
+                    stage=PipelineStage.MERGE,
+                    output_file=str(merged_file),
+                    metadata={
+                        "final_segments_count": len(merged_segments)
+                    },
+                    success=True
+                )
+
+            except Exception as e:
+                checkpoint_manager.create_checkpoint(
+                    input_file=args.input,
+                    stage=PipelineStage.MERGE,
+                    output_file="",
+                    success=False,
+                    error_message=str(e)
+                )
+                logger.error(f"❌ Ошибка объединения: {e}")
+                sys.exit(1)
+        else:
+            # Загружаем данные из checkpoint'а
+            logger.info("📂 Загружаю данные объединения из checkpoint'а")
+            state = checkpoint_manager.load_pipeline_state(args.input)
+            if state:
+                for cp in state.checkpoints:
+                    if cp.stage == PipelineStage.MERGE.value and cp.success:
+                        merged_segments = load_json(Path(cp.output_file))
+                        logger.info(f"✅ Объединение загружено из checkpoint'а: {len(merged_segments)} сегментов")
+                        break
+
+        # ЭТАП 5: Экспорт
+        if args.all_formats:
+            logger.info(f"[5/5] 💾 Экспортирую во всех форматах (SRT, JSON, ASS)...")
+        else:
+            logger.info(f"[5/5] 💾 Экспортирую в {args.format.upper()}...")
+
+        try:
+            export_agent = ExportAgent(format=args.format, create_all_formats=args.all_formats,
+                                       overwrite_existing=args.overwrite, add_timestamp=args.add_timestamp)
+            out_path = Path(args.output)
+            created_files = export_agent.run(merged_segments, out_path)
+
+            # Создаем финальный checkpoint
+            checkpoint_manager.create_checkpoint(
+                input_file=args.input,
+                stage=PipelineStage.EXPORT,
+                output_file=str(created_files[0]) if created_files else str(out_path),
+                metadata={
+                    "created_files": [str(f) for f in created_files],
+                    "format": args.format,
+                    "all_formats": args.all_formats
+                },
+                success=True
+            )
+
+            if args.all_formats:
+                logger.info(f"🎉 Готово! Созданы файлы: {[str(f) for f in created_files]}")
+            else:
+                logger.info(f"🎉 Готово! Результат сохранён: {created_files[0]}")
+
+        except Exception as e:
+            checkpoint_manager.create_checkpoint(
+                input_file=args.input,
+                stage=PipelineStage.EXPORT,
+                output_file="",
+                success=False,
+                error_message=str(e)
+            )
+            logger.error(f"❌ Ошибка экспорта: {e}")
+            sys.exit(1)
+
+        # Завершаем мониторинг
+        PERFORMANCE_MONITOR.end_processing(success=True)
+
+        # Сохраняем метрики производительности
+        PERFORMANCE_MONITOR.save_metrics()
+
+        # Получаем статус здоровья системы
+        health_status = PERFORMANCE_MONITOR.get_health_status()
+        logger.info(f"📊 Статус системы: {health_status['status']}")
+        if health_status['issues']:
+            for issue in health_status['issues']:
+                logger.warning(f"⚠️ {issue}")
+
+        # Финальные метрики
+        end_time = time.time()
+        total_time = end_time - start_time
+        logger.info("✨ Standard Pipeline с checkpoint'ами завершён успешно", extra={
+            'total_time_seconds': round(total_time, 2),
+            'total_segments': len(merged_segments),
+            'output_file': str(out_path),
+            'system_status': health_status['status'],
+            'resume_point': resume_point.value if resume_point else None,
+            'success': True
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка Standard Pipeline с checkpoint'ами: {e}")
+        sys.exit(1)
+
 def main():
     import time
     start_time = time.time()
@@ -421,10 +815,14 @@ def main():
         'output_format': args.format,
         'transcription_model': args.transcription_model,
         'language': args.language,
-        'pipeline_version': '2.0'
+        'pipeline_version': '2.1-checkpoint'
     })
 
     try:
+        # 0) Обработка команд checkpoint'ов
+        if handle_checkpoint_commands(args, logger):
+            return  # Команда checkpoint'а выполнена, выходим
+
         # 1) Валидация входного файла
         validate_input_file(args.input)
 
@@ -476,172 +874,8 @@ def main():
             sys_exit("PYANNOTE_KEY не установлен")
         return run_identification_pipeline(args, logger, PYANNOTE_KEY, start_time)
 
-    # Начинаем мониторинг основного pipeline
-    PERFORMANCE_MONITOR.start_processing()
-    logger.info("📊 Мониторинг: начало основного pipeline")
-
-    # 2) AudioLoaderAgent → (wav_local, wav_url)
-    logger.info(f"[1/5] 🎵 Конвертирую аудио: {args.input}")
-    try:
-        logger.info("📁 Метод загрузки: pyannote.ai Media API (безопасное временное хранилище)")
-
-        audio_agent = AudioLoaderAgent(
-            remote_wav_url=args.remote_wav_url,
-            pyannote_api_key=PYANNOTE_KEY
-        )
-        wav_local, wav_url = audio_agent.run(args.input)
-        logger.info(f"✅ Аудио готово: {wav_local} → {wav_url}")
-        PERFORMANCE_MONITOR.record_api_call()
-
-        # Сохраняем промежуточный WAV файл
-        input_name = Path(args.input).stem
-        interim_wav = Path("data/interim") / f"{input_name}_converted.wav"
-        import shutil
-        shutil.copy2(wav_local, interim_wav)
-        logger.debug(f"Промежуточный WAV сохранён: {interim_wav}")
-
-    except Exception as e:
-        logger.error(f"Ошибка обработки аудио: {e}")
-        sys.exit(1)
-
-    # 3) DiarizationAgent → raw_diar (List[Dict])
-    logger.info("[2/5] 🎤 Запуск диаризации...")
-    use_identify = bool(args.identify)
-    voiceprint_ids = []
-    if use_identify:
-        mapping = load_json(Path(args.identify))  # { "vp_uuid": "Alice", ... }
-        voiceprint_ids = list(mapping.keys())
-        logger.info(f"Режим идентификации: {len(voiceprint_ids)} голосовых отпечатков")
-
-    try:
-        diar_agent = DiarizationAgent(api_key=PYANNOTE_KEY,
-                                      use_identify=use_identify,
-                                      voiceprint_ids=voiceprint_ids)
-        PERFORMANCE_MONITOR.record_api_call()
-        raw_diar: List[Dict] = diar_agent.run(wav_url)
-        logger.info(f"✅ Диаризация завершена: {len(raw_diar)} сегментов")
-
-        # Сохраняем результат диаризации
-        diar_file = Path("data/interim") / f"{input_name}_diarization.json"
-        save_json(raw_diar, diar_file)
-        logger.debug(f"Результат диаризации сохранён: {diar_file}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Ошибка сети при обращении к Pyannote API: {e}")
-        logger.error("Проверьте подключение к интернету и корректность API ключа")
-        sys.exit(1)
-    except RuntimeError as e:
-        if "not-ready" in str(e):
-            logger.error("Превышено время ожидания обработки диаризации")
-            logger.error("Попробуйте с более коротким аудио файлом")
-        else:
-            logger.error(f"Ошибка Pyannote API: {e}")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"Неожиданная ошибка диаризации: {e}")
-        sys.exit(1)
-
-    # QC Agent (опционально для извлечения голосовых отпечатков)
-    qc_agent = QCAgent(manifest_dir=Path(args.voiceprints_dir) if args.voiceprints_dir else None,
-                       per_speaker_sec=30)
-    qc_result = qc_agent.run(wav_local, raw_diar)
-    if args.voiceprints_dir:
-        logger.info(f"✅ Голосовые отпечатки сохранены в {args.voiceprints_dir}")
-        return
-
-    # Если было identify, нужно заменить токены на человеческие имена в raw_diar
-    if use_identify:
-        # mapping = { "vp_uuid": "Alice", … }
-        for seg in raw_diar:
-            seg["speaker"] = mapping.get(seg["speaker"], seg["speaker"])
-        logger.info("✅ Применён маппинг голосовых отпечатков")
-
-    # 4) TranscriptionAgent → whisper_segments (List[Dict])
-    model_name = TranscriptionAgent.SUPPORTED_MODELS.get(args.transcription_model, {}).get('name', args.transcription_model)
-    logger.info(f"[3/5] 📝 Транскрибирую через {model_name}...")
-    try:
-        trans_agent = TranscriptionAgent(
-            api_key=OPENAI_KEY,
-            model=args.transcription_model,
-            language=args.language
-        )
-
-        # Показываем информацию о модели
-        model_info = trans_agent.get_model_info()
-        logger.info(f"🔧 Модель: {model_info['name']} ({model_info['cost_tier']} cost)")
-
-        PERFORMANCE_MONITOR.record_api_call()
-        whisper_segments = trans_agent.run(wav_local, args.prompt)
-        logger.info(f"✅ Транскрипция завершена: {len(whisper_segments)} сегментов")
-
-        # Сохраняем результат транскрипции
-        whisper_file = Path("data/interim") / f"{input_name}_transcription.json"
-        save_json(whisper_segments, whisper_file)
-        logger.debug(f"Результат транскрипции сохранён: {whisper_file}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Ошибка сети при обращении к OpenAI API: {e}")
-        logger.error("Проверьте подключение к интернету и корректность API ключа")
-        sys.exit(1)
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "rate limit" in error_msg or "quota" in error_msg:
-            logger.error("Превышен лимит запросов к OpenAI API")
-            logger.error("Подождите некоторое время или проверьте ваш план подписки")
-        elif "invalid" in error_msg and "key" in error_msg:
-            logger.error("Неверный API ключ OpenAI")
-            logger.error("Проверьте правильность OPENAI_API_KEY")
-        else:
-            logger.error(f"Ошибка OpenAI API: {e}")
-        sys.exit(1)
-
-    # 5) MergeAgent → merged_segments (List[{"start","end","speaker","text"}])
-    logger.info("[4/5] 🔗 Объединяю диаризацию с транскрипцией...")
-    merge_agent = MergeAgent()
-    merged_segments = merge_agent.run(raw_diar, whisper_segments)
-    logger.info(f"✅ Объединение завершено: {len(merged_segments)} финальных сегментов")
-
-    # Сохраняем финальный результат
-    merged_file = Path("data/interim") / f"{input_name}_merged.json"
-    save_json(merged_segments, merged_file)
-    logger.debug(f"Финальный результат сохранён: {merged_file}")
-
-    # 6) ExportAgent → финальный файл (SRT/JSON/ASS)
-    if args.all_formats:
-        logger.info(f"[5/5] 💾 Экспортирую во всех форматах (SRT, JSON, ASS)...")
-    else:
-        logger.info(f"[5/5] 💾 Экспортирую в {args.format.upper()}...")
-    export_agent = ExportAgent(format=args.format, create_all_formats=args.all_formats,
-                               overwrite_existing=args.overwrite, add_timestamp=args.add_timestamp)
-    out_path = Path(args.output)
-    created_files = export_agent.run(merged_segments, out_path)
-
-    if args.all_formats:
-        logger.info(f"🎉 Готово! Созданы файлы: {[str(f) for f in created_files]}")
-    else:
-        logger.info(f"🎉 Готово! Результат сохранён: {created_files[0]}")
-
-    # Завершаем мониторинг
-    PERFORMANCE_MONITOR.end_processing(success=True)
-
-    # Сохраняем метрики производительности
-    PERFORMANCE_MONITOR.save_metrics()
-
-    # Получаем статус здоровья системы
-    health_status = PERFORMANCE_MONITOR.get_health_status()
-    logger.info(f"📊 Статус системы: {health_status['status']}")
-    if health_status['issues']:
-        for issue in health_status['issues']:
-            logger.warning(f"⚠️ {issue}")
-
-    # Финальные метрики
-    end_time = time.time()
-    total_time = end_time - start_time
-    logger.info("✨ Speech Pipeline завершён успешно", extra={
-        'total_time_seconds': round(total_time, 2),
-        'total_segments': len(merged_segments),
-        'output_file': str(out_path),
-        'system_status': health_status['status'],
-        'success': True
-    })
+    # Запускаем стандартный пайплайн с поддержкой checkpoint'ов
+    return run_standard_pipeline_with_checkpoints(args, logger, PYANNOTE_KEY, OPENAI_KEY, start_time)
 
 if __name__ == "__main__":
     main()

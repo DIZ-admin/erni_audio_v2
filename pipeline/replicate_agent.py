@@ -15,6 +15,7 @@ except ImportError:
 
 from .base_agent import BaseAgent
 from .validation_mixin import ValidationMixin
+from .constants import REPLICATE_MODEL_NAME, REPLICATE_SUPPORTED_LANGUAGES
 
 
 class ReplicateAgent(BaseAgent, ValidationMixin):
@@ -23,23 +24,11 @@ class ReplicateAgent(BaseAgent, ValidationMixin):
     с использованием модели thomasmol/whisper-diarization.
     """
 
-    # Модель для использования (с конкретной версией)
-    MODEL_NAME = "thomasmol/whisper-diarization:1495a9cddc83b2203b0d8d3516e38b80fd1572ebc4bc5700ac1da56a9b3ed886"
+    # Модель для использования (из констант)
+    MODEL_NAME = REPLICATE_MODEL_NAME
 
-    # Поддерживаемые языки (основные)
-    SUPPORTED_LANGUAGES = {
-        "auto": "Автоопределение",
-        "en": "English",
-        "de": "Deutsch",
-        "fr": "Français",
-        "es": "Español",
-        "it": "Italiano",
-        "pt": "Português",
-        "ru": "Русский",
-        "zh": "中文",
-        "ja": "日本語",
-        "ko": "한국어"
-    }
+    # Поддерживаемые языки (из констант)
+    SUPPORTED_LANGUAGES = REPLICATE_SUPPORTED_LANGUAGES
 
     def __init__(self, api_token: str):
         """

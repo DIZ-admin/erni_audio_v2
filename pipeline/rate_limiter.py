@@ -5,6 +5,8 @@ import threading
 from collections import defaultdict, deque
 from typing import Dict, Optional
 import logging
+from .constants import DEFAULT_RATE_LIMIT_WINDOW
+from .settings import SETTINGS
 
 
 class RateLimiter:
@@ -15,7 +17,7 @@ class RateLimiter:
     Thread-safe для использования в многопоточных приложениях.
     """
     
-    def __init__(self, max_requests: int = 60, window_seconds: int = 60):
+    def __init__(self, max_requests: int = 60, window_seconds: int = DEFAULT_RATE_LIMIT_WINDOW):
         """
         Args:
             max_requests: Максимальное количество запросов в окне
@@ -107,7 +109,7 @@ class DynamicRateLimiter(RateLimiter):
     Расширенный rate limiter с динамическими лимитами и мониторингом.
     """
 
-    def __init__(self, max_requests: int = 60, window_seconds: int = 60,
+    def __init__(self, max_requests: int = 60, window_seconds: int = DEFAULT_RATE_LIMIT_WINDOW,
                  api_name: str = "unknown"):
         super().__init__(max_requests, window_seconds)
         self.api_name = api_name
@@ -186,25 +188,23 @@ class DynamicRateLimiter(RateLimiter):
 
 # Глобальные rate limiters с динамическими лимитами
 def create_rate_limiters():
-    """Создает rate limiters с настройками из переменных окружения."""
-    import os
-
-    # Pyannote.ai rate limiter
-    pyannote_max_requests = int(os.getenv("PYANNOTE_RATE_LIMIT", "30"))
-    pyannote_window = int(os.getenv("PYANNOTE_RATE_WINDOW", "60"))
-
-    # OpenAI rate limiter
-    openai_max_requests = int(os.getenv("OPENAI_RATE_LIMIT", "50"))
-    openai_window = int(os.getenv("OPENAI_RATE_WINDOW", "60"))
-
-    # Replicate rate limiter
-    replicate_max_requests = int(os.getenv("REPLICATE_RATE_LIMIT", "100"))
-    replicate_window = int(os.getenv("REPLICATE_RATE_WINDOW", "60"))
-
+    """Создает rate limiters с настройками из SETTINGS."""
     return {
-        "pyannote": DynamicRateLimiter(pyannote_max_requests, pyannote_window, "pyannote"),
-        "openai": DynamicRateLimiter(openai_max_requests, openai_window, "openai"),
-        "replicate": DynamicRateLimiter(replicate_max_requests, replicate_window, "replicate")
+        "pyannote": DynamicRateLimiter(
+            SETTINGS.api.pyannote_rate_limit,
+            SETTINGS.api.rate_limit_window,
+            "pyannote"
+        ),
+        "openai": DynamicRateLimiter(
+            SETTINGS.api.openai_rate_limit,
+            SETTINGS.api.rate_limit_window,
+            "openai"
+        ),
+        "replicate": DynamicRateLimiter(
+            SETTINGS.api.replicate_rate_limit,
+            SETTINGS.api.rate_limit_window,
+            "replicate"
+        )
     }
 
 # Глобальные rate limiters

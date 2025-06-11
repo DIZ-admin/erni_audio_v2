@@ -65,35 +65,45 @@ class ReplicateConfig:
 @dataclass
 class PipelineConfig:
     """Основная конфигурация пайплайна"""
-    # Пути
-    data_dir: Path = Path("data")
-    cache_dir: Path = Path("cache")
-    logs_dir: Path = Path("logs")
-    voiceprints_dir: Path = Path("voiceprints")
+    # Инициализируется из settings
+    def __post_init__(self):
+        from .settings import SETTINGS
 
-    # Лимиты
-    max_file_size_mb: int = 300  # Увеличен для поддержки больших файлов
-    max_audio_duration_hours: int = 4
-    max_concurrent_jobs: int = 3
+        # Пути
+        self.data_dir: Path = SETTINGS.paths.data_dir
+        self.cache_dir: Path = SETTINGS.paths.cache_dir
+        self.logs_dir: Path = SETTINGS.paths.logs_dir
+        self.voiceprints_dir: Path = SETTINGS.paths.voiceprints_dir
 
-    # Качество
-    min_confidence_threshold: float = 0.7
-    min_segment_duration: float = 0.5
+        # Лимиты
+        self.max_file_size_mb: int = SETTINGS.processing.max_file_size_mb
+        self.max_audio_duration_hours: int = SETTINGS.processing.max_audio_duration_hours
+        self.max_concurrent_jobs: int = SETTINGS.processing.max_concurrent_jobs
 
-    # Кэширование
-    cache_enabled: bool = True
-    cache_ttl_hours: int = 24
+        # Качество
+        self.min_confidence_threshold: float = SETTINGS.processing.min_confidence_threshold
+        self.min_segment_duration: float = SETTINGS.processing.min_segment_duration
 
-    # Логирование
-    log_level: str = "INFO"
-    log_rotation_mb: int = 10
-    log_backup_count: int = 5
+        # Кэширование
+        self.cache_enabled: bool = SETTINGS.cache.enabled
+        self.cache_ttl_hours: int = SETTINGS.cache.ttl_hours
 
-    # Транскрипция
-    transcription: TranscriptionConfig = None
+        # Логирование
+        self.log_level: str = SETTINGS.logging.level
+        self.log_rotation_mb: int = SETTINGS.logging.rotation_mb
+        self.log_backup_count: int = SETTINGS.logging.backup_count
 
-    # Replicate
-    replicate: ReplicateConfig = None
+        # Транскрипция
+        self.transcription: TranscriptionConfig = TranscriptionConfig(
+            model=SETTINGS.transcription.default_model,
+            language=SETTINGS.transcription.language,
+            temperature=SETTINGS.transcription.temperature,
+            enable_cost_estimation=SETTINGS.transcription.enable_cost_estimation,
+            fallback_model=SETTINGS.transcription.fallback_model
+        )
+
+        # Replicate
+        self.replicate: ReplicateConfig = ReplicateConfig()
 
     def __post_init__(self):
         """Инициализация после создания объекта"""
@@ -129,20 +139,39 @@ class ConfigurationManager(ConfigurationInterface):
         """Загружает конфигурации API"""
         configs = {}
         
+        # Импортируем настройки
+        from .settings import SETTINGS
+
         # OpenAI конфигурация
         configs["openai"] = APIConfig(
-            base_url="https://api.openai.com/v1",
-            timeout=TimeoutConfig(connection=30, read=120, total=300),
-            retry=RetryConfig(max_attempts=3, min_wait=1.0, max_wait=30.0),
-            rate_limit_per_minute=50
+            base_url=SETTINGS.api.openai_url,
+            timeout=TimeoutConfig(
+                connection=SETTINGS.api.openai_connection_timeout,
+                read=SETTINGS.api.openai_read_timeout,
+                total=SETTINGS.api.openai_total_timeout
+            ),
+            retry=RetryConfig(
+                max_attempts=SETTINGS.api.openai_max_retries,
+                min_wait=SETTINGS.api.openai_retry_min_wait,
+                max_wait=SETTINGS.api.openai_retry_max_wait
+            ),
+            rate_limit_per_minute=SETTINGS.api.openai_rate_limit
         )
         
         # Pyannote конфигурация
         configs["pyannote"] = APIConfig(
-            base_url="https://api.pyannote.ai/v1",
-            timeout=TimeoutConfig(connection=30, read=180, total=600),
-            retry=RetryConfig(max_attempts=40, min_wait=2.0, max_wait=30.0),
-            rate_limit_per_minute=20
+            base_url=SETTINGS.api.pyannote_url,
+            timeout=TimeoutConfig(
+                connection=SETTINGS.api.pyannote_connection_timeout,
+                read=SETTINGS.api.pyannote_read_timeout,
+                total=SETTINGS.api.pyannote_total_timeout
+            ),
+            retry=RetryConfig(
+                max_attempts=SETTINGS.api.pyannote_max_retries,
+                min_wait=SETTINGS.api.pyannote_retry_min_wait,
+                max_wait=SETTINGS.api.pyannote_retry_max_wait
+            ),
+            rate_limit_per_minute=SETTINGS.api.pyannote_rate_limit
         )
         
         return configs

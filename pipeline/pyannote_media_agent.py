@@ -7,6 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from .constants import API_ENDPOINTS, VIRTUAL_PATH_PREFIX
+from .settings import SETTINGS
 
 
 class PyannoteMediaAgent:
@@ -31,7 +33,7 @@ class PyannoteMediaAgent:
             "Content-Type": "application/json"
         }
         self.logger = logging.getLogger(__name__)
-        self.base_url = "https://api.pyannote.ai/v1"
+        self.base_url = SETTINGS.api.pyannote_url
 
     @retry(
         stop=stop_after_attempt(3),
@@ -57,10 +59,10 @@ class PyannoteMediaAgent:
             payload = {"url": virtual_path}
 
             response = requests.post(
-                f"{self.base_url}/media/input",
+                f"{self.base_url}{API_ENDPOINTS['pyannote']['media_input']}",
                 json=payload,
                 headers=self.headers,
-                timeout=30
+                timeout=SETTINGS.api.pyannote_connection_timeout
             )
             response.raise_for_status()
             
@@ -111,7 +113,7 @@ class PyannoteMediaAgent:
                 response = requests.put(
                     presigned_url,
                     data=file_data,
-                    timeout=120  # Увеличенный таймаут для больших файлов
+                    timeout=SETTINGS.api.pyannote_read_timeout  # Увеличенный таймаут для больших файлов
                 )
                 response.raise_for_status()
             
@@ -147,7 +149,7 @@ class PyannoteMediaAgent:
                 filename = f"conversation-{unique_id}.wav"
 
             # Создаем виртуальный путь точно как в документации
-            virtual_path = f"media://example/{filename}"
+            virtual_path = f"{VIRTUAL_PATH_PREFIX}{filename}"
             
             self.logger.info(f"📤 Загружаю {file_path.name} в pyannote.ai временное хранилище...")
             
@@ -178,7 +180,7 @@ class PyannoteMediaAgent:
             response = requests.get(
                 f"{self.base_url}/test",
                 headers=self.headers,
-                timeout=10
+                timeout=SETTINGS.api.pyannote_connection_timeout
             )
             response.raise_for_status()
             return True

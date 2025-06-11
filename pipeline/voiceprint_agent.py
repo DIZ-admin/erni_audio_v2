@@ -41,7 +41,8 @@ class VoiceprintAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin):
 
         self.api_key = api_key
         self.webhook_url = webhook_url
-        self.base_url = "https://api.pyannote.ai/v1"
+        from .settings import SETTINGS
+        self.base_url = SETTINGS.api.pyannote_url
 
         # Инициализируем медиа агент для загрузки файлов
         self.media_agent = PyannoteMediaAgent(api_key)

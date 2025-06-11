@@ -82,6 +82,7 @@ data/interim/*.json
 data/processed/*.srt
 data/processed/*.ass
 data/processed/*.json
+data/processed/checkpoints/*.json
 voiceprints/*.wav
 voiceprints/manifest.json
 

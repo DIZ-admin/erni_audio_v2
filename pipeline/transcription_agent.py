@@ -19,6 +19,11 @@ from .base_agent import BaseAgent
 from .validation_mixin import ValidationMixin
 from .retry_mixin import RetryMixin
 from .rate_limit_mixin import RateLimitMixin
+from .constants import (
+    SUPPORTED_TRANSCRIPTION_MODELS,
+    DEFAULT_MAX_CONCURRENT_CHUNKS,
+    DEFAULT_CHUNK_TIMEOUT_MINUTES
+)
 
 class TranscriptionAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin):
     """
@@ -28,36 +33,8 @@ class TranscriptionAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin)
     id, start, end, text, tokens, avg_logprob, no_speech_prob, temperature, compression_ratio.
     """
 
-    # Поддерживаемые модели и их характеристики
-    SUPPORTED_MODELS = {
-        "whisper-1": {
-            "name": "Whisper v1",
-            "description": "Базовая модель Whisper, быстрая и экономичная",
-            "max_file_size_mb": 25,
-            "supports_language": True,
-            "supports_prompt": True,
-            "supports_verbose_json": True,
-            "cost_tier": "low"
-        },
-        "gpt-4o-mini-transcribe": {
-            "name": "GPT-4o Mini Transcribe",
-            "description": "Улучшенная модель с балансом цены и качества",
-            "max_file_size_mb": 25,
-            "supports_language": True,
-            "supports_prompt": True,
-            "supports_verbose_json": False,
-            "cost_tier": "medium"
-        },
-        "gpt-4o-transcribe": {
-            "name": "GPT-4o Transcribe",
-            "description": "Наиболее точная модель с лучшим качеством распознавания",
-            "max_file_size_mb": 25,
-            "supports_language": True,
-            "supports_prompt": True,
-            "supports_verbose_json": False,
-            "cost_tier": "high"
-        }
-    }
+    # Поддерживаемые модели и их характеристики (из констант)
+    SUPPORTED_MODELS = SUPPORTED_TRANSCRIPTION_MODELS
 
     def __init__(self, api_key: str, model: str = "whisper-1", language: Optional[str] = None, response_format: str = "auto"):
         """
@@ -81,8 +58,8 @@ class TranscriptionAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin)
         self.response_format = self._determine_response_format(response_format)
 
         # Конфигурация параллельной обработки
-        self.max_concurrent_chunks = 3  # Максимум 3 части одновременно
-        self.chunk_timeout = 30 * 60  # 30 минут на часть
+        self.max_concurrent_chunks = DEFAULT_MAX_CONCURRENT_CHUNKS  # Максимум 3 части одновременно
+        self.chunk_timeout = DEFAULT_CHUNK_TIMEOUT_MINUTES * 60  # 30 минут на часть
 
         # Статистика параллельной обработки
         self.parallel_stats = {

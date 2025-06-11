@@ -1,0 +1,89 @@
+{
+  "test_summary": {
+    "total_tests": 13,
+    "passed_tests": 13,
+    "failed_tests": 0,
+    "success_rate": "100.0%"
+  },
+  "test_results": [
+    {
+      "test_name": "CheckpointManager Init",
+      "success": true,
+      "details": "Инициализация успешна",
+      "timestamp": "2025-06-10T22:43:30.305499"
+    },
+    {
+      "test_name": "Pipeline ID Generation",
+      "success": true,
+      "details": "ID: test_checkpoint_3759228794195543613",
+      "timestamp": "2025-06-10T22:43:30.305600"
+    },
+    {
+      "test_name": "Checkpoint Creation",
+      "success": true,
+      "details": "Checkpoint создан",
+      "timestamp": "2025-06-10T22:43:30.306265"
+    },
+    {
+      "test_name": "State Loading",
+      "success": true,
+      "details": "Состояние загружено",
+      "timestamp": "2025-06-10T22:43:30.306565"
+    },
+    {
+      "test_name": "Resume Point",
+      "success": true,
+      "details": "Точка возобновления: diarization",
+      "timestamp": "2025-06-10T22:43:30.306760"
+    },
+    {
+      "test_name": "File Validation",
+      "success": true,
+      "details": "Валидация прошла",
+      "timestamp": "2025-06-10T22:43:30.306930"
+    },
+    {
+      "test_name": "Pipeline Summary",
+      "success": true,
+      "details": "Сводка создана",
+      "timestamp": "2025-06-10T22:43:30.307089"
+    },
+    {
+      "test_name": "Error Checkpoint",
+      "success": true,
+      "details": "Checkpoint с ошибкой создан",
+      "timestamp": "2025-06-10T22:43:30.307828"
+    },
+    {
+      "test_name": "Cleanup",
+      "success": true,
+      "details": "Удалено 1 checkpoint'ов",
+      "timestamp": "2025-06-10T22:43:30.308205"
+    },
+    {
+      "test_name": "CLI List Command",
+      "success": true,
+      "details": "Команда list выполнена",
+      "timestamp": "2025-06-10T22:43:30.382396"
+    },
+    {
+      "test_name": "CLI Cleanup Command",
+      "success": true,
+      "details": "Команда cleanup выполнена",
+      "timestamp": "2025-06-10T22:43:30.448782"
+    },
+    {
+      "test_name": "File Structure",
+      "success": true,
+      "details": "Структура файлов корректна",
+      "timestamp": "2025-06-10T22:43:30.450978"
+    },
+    {
+      "test_name": "Pipeline Isolation",
+      "success": true,
+      "details": "Изоляция работает корректно",
+      "timestamp": "2025-06-10T22:43:30.452466"
+    }
+  ],
+  "generated_at": "2025-06-10T22:43:30.452834"
+}

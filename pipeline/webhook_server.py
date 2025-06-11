@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .webhook_agent import WebhookAgent, WebhookVerificationError
+from .constants import HTTP_STATUS, TIME_FORMAT_PRECISION
+from .settings import SETTINGS
 
 
 # Настройка логирования
@@ -51,9 +53,9 @@ class WebhookServer:
         if not self.webhook_secret:
             raise ValueError("PYANNOTEAI_WEBHOOK_SECRET не найден в переменных окружения")
         
-        self.data_dir = data_dir or Path("data/interim")
-        self.host = os.getenv("WEBHOOK_SERVER_HOST", "0.0.0.0")
-        self.port = int(os.getenv("WEBHOOK_SERVER_PORT", "8000"))
+        self.data_dir = data_dir or SETTINGS.paths.interim_dir
+        self.host = SETTINGS.webhook.host
+        self.port = SETTINGS.webhook.port
         
         # Инициализируем webhook агент
         self.webhook_agent = WebhookAgent(self.webhook_secret, self.data_dir)
@@ -97,7 +99,7 @@ class WebhookServer:
             
             # Логируем время обработки
             process_time = time.time() - start_time
-            logger.info(f"⏱️ Обработано за {process_time:.3f}s, статус: {response.status_code}")
+            logger.info(f"⏱️ Обработано за {process_time:.{TIME_FORMAT_PRECISION}f}s, статус: {response.status_code}")
             
             return response
     
@@ -122,7 +124,7 @@ class WebhookServer:
                 if not timestamp or not signature:
                     logger.warning("❌ Отсутствуют обязательные заголовки")
                     raise HTTPException(
-                        status_code=400, 
+                        status_code=HTTP_STATUS["BAD_REQUEST"],
                         detail="Отсутствуют заголовки X-Request-Timestamp или X-Signature"
                     )
                 
@@ -133,14 +135,14 @@ class WebhookServer:
                 # Верифицируем подпись
                 if not self.webhook_agent.verify_signature(timestamp, body_str, signature):
                     logger.warning(f"❌ Неверная подпись веб-хука от {request.client.host}")
-                    raise HTTPException(status_code=403, detail="Неверная подпись")
+                    raise HTTPException(status_code=HTTP_STATUS["FORBIDDEN"], detail="Неверная подпись")
                 
                 # Парсим JSON payload
                 try:
                     payload = json.loads(body_str)
                 except json.JSONDecodeError as e:
                     logger.error(f"❌ Ошибка парсинга JSON: {e}")
-                    raise HTTPException(status_code=400, detail="Неверный JSON")
+                    raise HTTPException(status_code=HTTP_STATUS["BAD_REQUEST"], detail="Неверный JSON")
                 
                 # Создаем событие веб-хука
                 event = self.webhook_agent.parse_webhook_payload(payload, headers)
@@ -151,7 +153,7 @@ class WebhookServer:
                 logger.info(f"✅ Webhook принят: {event.job_id} ({event.job_type})")
                 
                 return JSONResponse(
-                    status_code=200,
+                    status_code=HTTP_STATUS["OK"],
                     content={"status": "success", "message": "Webhook обработан"}
                 )
                 
@@ -159,17 +161,17 @@ class WebhookServer:
                 raise
             except WebhookVerificationError as e:
                 logger.error(f"❌ Ошибка верификации: {e}")
-                raise HTTPException(status_code=403, detail=str(e))
+                raise HTTPException(status_code=HTTP_STATUS["FORBIDDEN"], detail=str(e))
             except Exception as e:
                 logger.error(f"❌ Неожиданная ошибка: {e}")
-                raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+                raise HTTPException(status_code=HTTP_STATUS["INTERNAL_ERROR"], detail="Внутренняя ошибка сервера")
         
         @self.app.get("/health")
         async def health_check():
             """Health check эндпоинт"""
             metrics = self.webhook_agent.get_metrics()
             return JSONResponse(
-                status_code=200,
+                status_code=HTTP_STATUS["OK"],
                 content={
                     "status": "healthy",
                     "service": "pyannote-webhook-server",
@@ -181,13 +183,13 @@ class WebhookServer:
         async def get_metrics():
             """Эндпоинт для получения метрик"""
             metrics = self.webhook_agent.get_metrics()
-            return JSONResponse(status_code=200, content=metrics)
+            return JSONResponse(status_code=HTTP_STATUS["OK"], content=metrics)
         
         @self.app.get("/")
         async def root():
             """Корневой эндпоинт"""
             return JSONResponse(
-                status_code=200,
+                status_code=HTTP_STATUS["OK"],
                 content={
                     "service": "Pyannote.ai Webhook Server",
                     "version": "1.0.0",

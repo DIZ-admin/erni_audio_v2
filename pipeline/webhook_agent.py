@@ -64,7 +64,7 @@ class WebhookAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin):
         BaseAgent.__init__(self, name="WebhookAgent")
         ValidationMixin.__init__(self)
         RetryMixin.__init__(self)
-        RateLimitMixin.__init__(self, service_name="webhook")
+        RateLimitMixin.__init__(self, api_name="webhook")
 
         # Валидация webhook secret
         if not webhook_secret or len(webhook_secret) < 10:
@@ -279,10 +279,40 @@ class WebhookAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin):
         self.event_handlers[job_type] = handler
         self.logger.info(f"📝 Зарегистрирован обработчик для {job_type}")
     
+    def run(self, payload: Dict[str, Any], headers: Dict[str, str]) -> bool:
+        """
+        Основной метод выполнения WebhookAgent.
+
+        Args:
+            payload: JSON payload веб-хука
+            headers: HTTP заголовки запроса
+
+        Returns:
+            True если webhook успешно обработан
+        """
+        try:
+            # Верификация подписи
+            timestamp = headers.get("x-request-timestamp", "")
+            signature = headers.get("x-signature", "")
+            body = json.dumps(payload, separators=(',', ':'))
+
+            if not self.verify_signature(timestamp, body, signature):
+                raise WebhookVerificationError("Неверная подпись webhook")
+
+            # Парсинг события
+            event = self.parse_webhook_payload(payload, headers)
+
+            # Обработка события
+            return self.process_webhook_event(event)
+
+        except Exception as e:
+            self.handle_error(e, "Ошибка обработки webhook")
+            return False
+
     def get_metrics(self) -> Dict[str, Any]:
         """
         Возвращает метрики работы агента.
-        
+
         Returns:
             Словарь с метриками
         """

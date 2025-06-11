@@ -1,0 +1,88 @@
+{
+  "input_file": "tests/assets/test_audio.wav",
+  "pipeline_id": "test_audio_904332895227404059",
+  "created_at": "2025-06-10T20:52:42.601881",
+  "last_updated": "2025-06-10T20:52:51.705154",
+  "completed_stages": [
+    "audio_conversion",
+    "diarization",
+    "transcription",
+    "merge",
+    "export"
+  ],
+  "current_stage": "audio_conversion",
+  "failed_stage": null,
+  "checkpoints": [
+    {
+      "stage": "audio_conversion",
+      "timestamp": "2025-06-10T20:52:42.601941",
+      "input_file": "tests/assets/test_audio.wav",
+      "output_file": "data/interim/test_audio_converted.wav",
+      "metadata": {
+        "wav_local": "/tmp/8ec9f71a-5bb2-403f-957e-d28a949090e3.wav",
+        "wav_url": "media://example/conversation-37cf0314.wav",
+        "file_size_mb": 1.5339279174804688
+      },
+      "success": true,
+      "error_message": null
+    },
+    {
+      "stage": "diarization",
+      "timestamp": "2025-06-10T20:52:48.135436",
+      "input_file": "tests/assets/test_audio.wav",
+      "output_file": "data/interim/test_audio_diarization.json",
+      "metadata": {
+        "segments_count": 14,
+        "use_identify": false,
+        "voiceprint_ids": []
+      },
+      "success": true,
+      "error_message": null
+    },
+    {
+      "stage": "transcription",
+      "timestamp": "2025-06-10T20:52:51.689127",
+      "input_file": "tests/assets/test_audio.wav",
+      "output_file": "data/interim/test_audio_transcription.json",
+      "metadata": {
+        "segments_count": 9,
+        "model": "whisper-1",
+        "language": null,
+        "prompt": ""
+      },
+      "success": true,
+      "error_message": null
+    },
+    {
+      "stage": "merge",
+      "timestamp": "2025-06-10T20:52:51.696503",
+      "input_file": "tests/assets/test_audio.wav",
+      "output_file": "data/interim/test_audio_merged.json",
+      "metadata": {
+        "final_segments_count": 1
+      },
+      "success": true,
+      "error_message": null
+    },
+    {
+      "stage": "export",
+      "timestamp": "2025-06-10T20:52:51.704638",
+      "input_file": "tests/assets/test_audio.wav",
+      "output_file": "data/processed/transcript_001.srt",
+      "metadata": {
+        "created_files": [
+          "data/processed/transcript_001.srt"
+        ],
+        "format": "srt",
+        "all_formats": false
+      },
+      "success": true,
+      "error_message": null
+    }
+  ],
+  "metadata": {
+    "wav_local": "/tmp/8ec9f71a-5bb2-403f-957e-d28a949090e3.wav",
+    "wav_url": "media://example/conversation-37cf0314.wav",
+    "file_size_mb": 1.5339279174804688
+  }
+}

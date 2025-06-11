@@ -5,6 +5,10 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from .base_agent import BaseAgent
 from .validation_mixin import ValidationMixin
+from .constants import (
+    DEFAULT_MIN_OVERLAP_THRESHOLD,
+    DEFAULT_MIN_CONFIDENCE_THRESHOLD
+)
 
 
 @dataclass
@@ -33,8 +37,8 @@ class MergeAgent(BaseAgent, ValidationMixin):
     """
 
     def __init__(self, merge_strategy: str = "best_overlap",
-                 min_overlap_threshold: float = 0.1,
-                 confidence_threshold: float = 0.5):
+                 min_overlap_threshold: float = DEFAULT_MIN_OVERLAP_THRESHOLD,
+                 confidence_threshold: float = DEFAULT_MIN_CONFIDENCE_THRESHOLD):
         """
         Args:
             merge_strategy: Стратегия слияния ("best_overlap", "weighted", "majority_vote")

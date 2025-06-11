@@ -10,8 +10,14 @@ from dataclasses import dataclass
 
 from .base_agent import BaseAgent
 from .validation_mixin import ValidationMixin
-
-TARGET_SR = 16_000
+from .constants import (
+    TARGET_SAMPLE_RATE,
+    MIN_AUDIO_DURATION_SECONDS,
+    GOOD_VOICEPRINT_DURATION_SECONDS,
+    DEFAULT_PER_SPEAKER_SECONDS,
+    DEFAULT_MIN_SEGMENT_DURATION,
+    DEFAULT_MAX_SILENCE_GAP
+)
 
 @dataclass
 class QualityMetrics:
@@ -48,8 +54,10 @@ class QCAgent(BaseAgent, ValidationMixin):
     - Генерация отчетов о качестве
     """
 
-    def __init__(self, manifest_dir: Optional[Path] = None, per_speaker_sec: int = 30,
-                 min_segment_duration: float = 0.5, max_silence_gap: float = 5.0):
+    def __init__(self, manifest_dir: Optional[Path] = None,
+                 per_speaker_sec: int = DEFAULT_PER_SPEAKER_SECONDS,
+                 min_segment_duration: float = DEFAULT_MIN_SEGMENT_DURATION,
+                 max_silence_gap: float = DEFAULT_MAX_SILENCE_GAP):
         """
         Args:
             manifest_dir: Путь к папке для сохранения WAV-эталонов voiceprints
@@ -461,19 +469,19 @@ class QCAgent(BaseAgent, ValidationMixin):
                     continue
 
             # Проверяем минимальную длительность
-            if len(collected) < 5_000:  # Минимум 5 секунд
+            if len(collected) < MIN_AUDIO_DURATION_SECONDS * 1000:  # Минимум 5 секунд
                 self.logger.warning(f"⚠️ Недостаточно данных для {spk}: {len(collected)/1000:.1f}с")
                 continue
 
             # Сохраняем voiceprint
             out_file = self.manifest_dir / f"{spk}.wav"
             try:
-                collected.set_frame_rate(TARGET_SR).set_channels(1).export(out_file, format="wav")
+                collected.set_frame_rate(TARGET_SAMPLE_RATE).set_channels(1).export(out_file, format="wav")
                 manifest[spk] = {
                     "file": out_file.as_posix(),
                     "duration": len(collected) / 1000,
                     "segments_used": segments_used,
-                    "quality": "good" if len(collected) >= 10_000 else "acceptable"
+                    "quality": "good" if len(collected) >= GOOD_VOICEPRINT_DURATION_SECONDS * 1000 else "acceptable"
                 }
                 self.logger.info(f"💾 Voiceprint сохранен: {spk} → {out_file} ({len(collected)/1000:.1f}с)")
             except Exception as e:
@@ -558,11 +566,11 @@ class QCAgent(BaseAgent, ValidationMixin):
                 collected += snippet
                 if len(collected) >= self.per_speaker_sec * 1000:
                     break
-            if len(collected) < 5_000:
+            if len(collected) < MIN_AUDIO_DURATION_SECONDS * 1000:
                 continue
 
             out_file = self.manifest_dir / f"{spk}.wav"
-            collected.set_frame_rate(TARGET_SR).set_channels(1).export(out_file, format="wav")
+            collected.set_frame_rate(TARGET_SAMPLE_RATE).set_channels(1).export(out_file, format="wav")
             manifest[spk] = out_file.as_posix()
             print(f"💾  QCAgent: saved voiceprint → {out_file}")
 

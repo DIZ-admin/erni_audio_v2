@@ -4,6 +4,7 @@ tenacity>=8.2.0
 pydub>=0.25.1
 openai>=1.0.0
 python-dotenv>=1.0.0
+replicate>=0.15.0
 
 # System monitoring
 psutil>=6.0.0

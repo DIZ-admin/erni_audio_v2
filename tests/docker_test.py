@@ -133,10 +133,11 @@ class DockerTester:
         self.run_command(["docker", "rm", self.container_name])
         
         # Создаём .env файл для тестирования
-        env_content = """
-# Тестовые переменные окружения
-PYANNOTEAI_API_TOKEN=test_token_here
-OPENAI_API_KEY=test_openai_key_here
+        import uuid
+        env_content = f"""
+# Тестовые переменные окружения (генерируются динамически)
+PYANNOTEAI_API_TOKEN=test_token_{uuid.uuid4().hex[:16]}
+OPENAI_API_KEY=test_openai_{uuid.uuid4().hex[:16]}
 LOG_LEVEL=DEBUG
 ENABLE_HEALTH_CHECKS=true
 """

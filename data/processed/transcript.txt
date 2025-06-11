@@ -1,27 +1,8 @@
 ТРАНСКРИПЦИЯ АУДИО
 ==================================================
-Дата экспорта: 2025-06-10 13:37:16
-Всего сегментов: 7
-Общая длительность: 121.80 секунд
+Дата экспорта: 2025-06-10 14:19:25
+Всего сегментов: 2838
+Общая длительность: 7872.27 секунд
 ==================================================
 
-[SPEAKER_00]
-[00:00-00:13] oder jetzt sprechen wir und ich habe zuletzt habe ich zwei aufnahmen gemacht dort hatte ich das problem dass die aufnahme immer wieder stoppt
-
-[SPEAKER_02]
-[00:13-00:20] automatisch. Wie lange kann das recorden?
-
-[SPEAKER_00]
-[00:20-01:12] lange aber ich weiss nicht warum es hat gestoppt ich bin auch nicht ganz sicher ob es stoppt wirklich oder ob es nur ist eine änderung in der darstellung dass wie ein bisschen sleep mode weisst du aber vielleicht es schreibt trotzdem im hintergrund bei diesen gesprächen ich wollte das nicht riskieren und habe immer wieder gedrückt play play play dass es einfach viele viele viele ja es hat nein es war nachher ein pfeil aber immer stoppt ja ich war nicht ganz sicher ob es wirklich stoppt oder nicht ich versuche es jetzt zu demonstrieren ich weiss nicht ob es klappt haben wir station through? nein so meeting station? ja ja recording nein nein
-
-[UNK_SPEAKER_00]
-[01:12-01:24] aber ich nicht. Vielleicht einfach laptop mit recording? ja ich weiss nicht ob jetzt
-
-[SPEAKER_00]
-[01:24-01:44] es noch nicht stoppt ist nur bildschirm ein bisschen dunkel jetzt siehst du jetzt das das ist diese situation aber vielleicht sprechen wir jetzt einfach noch ein bisschen weiter ab jetzt hören wir das noch oder hören wir das nicht weil ich siehe keine aktivität und dann habe ich immer gemacht play play play
-
-[SPEAKER_02]
-[01:44-01:50] aber jetzt haben wir das nicht gemacht ich denke einfach diese laptop recording
-
-[SPEAKER_00]
-[01:50-02:01] und laptop und jetzt machen wir play aber jetzt habe ich wieder play gedrückt und jetzt machen wir einen test
+[SPEAKER_07]

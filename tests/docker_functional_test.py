@@ -76,13 +76,14 @@ class DockerFunctionalTester:
         logger.info("🔧 Настройка тестового окружения...")
         
         # Создаём тестовый .env файл с mock данными
-        test_env_content = """
-# Тестовые переменные окружения (MOCK данные)
-PYANNOTEAI_API_TOKEN=test_pyannote_token_mock
-PYANNOTE_API_KEY=test_pyannote_key_mock
-OPENAI_API_KEY=test_openai_key_mock
-REPLICATE_API_TOKEN=test_replicate_token_mock
-PYANNOTEAI_WEBHOOK_SECRET=test_webhook_secret_mock
+        import uuid
+        test_env_content = f"""
+# Тестовые переменные окружения (MOCK данные - генерируются динамически)
+PYANNOTEAI_API_TOKEN=test_pyannote_{uuid.uuid4().hex[:16]}
+PYANNOTE_API_KEY=test_pyannote_{uuid.uuid4().hex[:16]}
+OPENAI_API_KEY=test_openai_{uuid.uuid4().hex[:16]}
+REPLICATE_API_TOKEN=test_replicate_{uuid.uuid4().hex[:16]}
+PYANNOTEAI_WEBHOOK_SECRET=test_webhook_{uuid.uuid4().hex[:16]}
 
 # Конфигурация для тестирования
 LOG_LEVEL=DEBUG

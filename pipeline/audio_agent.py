@@ -11,8 +11,7 @@ from .base_agent import BaseAgent
 from .validation_mixin import ValidationMixin
 from .rate_limit_mixin import RateLimitMixin
 from .pyannote_media_agent import PyannoteMediaAgent
-
-TARGET_SR = 16_000  # 16 kHz for Whisper & Pyannote
+from .constants import TARGET_SAMPLE_RATE
 
 class AudioLoaderAgent(BaseAgent, ValidationMixin, RateLimitMixin):
     """
@@ -76,7 +75,7 @@ class AudioLoaderAgent(BaseAgent, ValidationMixin, RateLimitMixin):
             "ffmpeg", "-y",
             "-i", str(src),
             "-ac", "1",
-            "-ar", str(TARGET_SR),
+            "-ar", str(TARGET_SAMPLE_RATE),
             "-vn", tmp.as_posix(),
         ]
 
@@ -104,7 +103,7 @@ class AudioLoaderAgent(BaseAgent, ValidationMixin, RateLimitMixin):
             Виртуальный путь в pyannote.ai Media API
         """
         # Валидируем файл перед загрузкой
-        self.validate_audio_file(wav_path, max_size_mb=100)  # pyannote.ai лимит
+        self.validate_audio_file(wav_path, max_size_mb=300)  # pyannote.ai лимит увеличен
 
         def _upload():
             self.log_with_emoji("info", "📤", f"Загружаю {wav_path.name} в pyannote.ai...")

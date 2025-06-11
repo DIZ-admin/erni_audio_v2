@@ -17,8 +17,9 @@ class TestWebhookServer:
     
     @pytest.fixture
     def webhook_secret(self):
-        """Тестовый секрет для веб-хуков"""
-        return "whs_test_secret_12345"
+        """Тестовый секрет для веб-хуков (генерируется динамически)"""
+        import uuid
+        return f"whs_test_{uuid.uuid4().hex[:16]}"
     
     @pytest.fixture
     def webhook_server(self, webhook_secret, tmp_path):
@@ -59,9 +60,9 @@ class TestWebhookServer:
         ).hexdigest()
         return signature
     
-    def test_webhook_server_initialization(self, webhook_server):
+    def test_webhook_server_initialization(self, webhook_server, webhook_secret):
         """Тест инициализации WebhookServer"""
-        assert webhook_server.webhook_secret == "whs_test_secret_12345"
+        assert webhook_server.webhook_secret == webhook_secret
         assert webhook_server.host == "0.0.0.0"
         assert webhook_server.port == 8000
         assert webhook_server.webhook_agent is not None

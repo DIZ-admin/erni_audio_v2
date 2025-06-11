@@ -8,8 +8,10 @@ from .base_agent import BaseAgent
 from .validation_mixin import ValidationMixin
 from .retry_mixin import RetryMixin
 from .rate_limit_mixin import RateLimitMixin
+from .constants import API_ENDPOINTS
+from .settings import SETTINGS
 
-PYANNOTE_API = "https://api.pyannote.ai/v1"
+PYANNOTE_API = SETTINGS.api.pyannote_url
 
 class DiarizationAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin):
     """
@@ -132,10 +134,10 @@ class DiarizationAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin):
             # Выполняем запрос с rate limiting
             def _start_diarization():
                 r = requests.post(
-                    f"{PYANNOTE_API}/diarize",
+                    f"{PYANNOTE_API}{API_ENDPOINTS['pyannote']['diarize']}",
                     json=payload,
                     headers=self.headers,
-                    timeout=30,
+                    timeout=SETTINGS.api.pyannote_connection_timeout,
                 )
                 r.raise_for_status()
                 return r.json()
@@ -234,10 +236,10 @@ class DiarizationAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin):
             # Выполняем запрос с rate limiting
             def _start_identification():
                 r = requests.post(
-                    f"{PYANNOTE_API}/identify",
+                    f"{PYANNOTE_API}{API_ENDPOINTS['pyannote']['identify']}",
                     json=payload,
                     headers=self.headers,
-                    timeout=30,
+                    timeout=SETTINGS.api.pyannote_connection_timeout,
                 )
                 r.raise_for_status()
                 return r.json()
@@ -332,10 +334,10 @@ class DiarizationAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin):
             }
 
             r = requests.post(
-                f"{PYANNOTE_API}/diarize",
+                f"{PYANNOTE_API}{API_ENDPOINTS['pyannote']['diarize']}",
                 json=payload,
                 headers=self.headers,
-                timeout=30,
+                timeout=SETTINGS.api.pyannote_connection_timeout,
             )
             r.raise_for_status()
 
@@ -381,10 +383,10 @@ class DiarizationAgent(BaseAgent, ValidationMixin, RetryMixin, RateLimitMixin):
             }
 
             r = requests.post(
-                f"{PYANNOTE_API}/identify",
+                f"{PYANNOTE_API}{API_ENDPOINTS['pyannote']['identify']}",
                 json=payload,
                 headers=self.headers,
-                timeout=30,
+                timeout=SETTINGS.api.pyannote_connection_timeout,
             )
             r.raise_for_status()
 
